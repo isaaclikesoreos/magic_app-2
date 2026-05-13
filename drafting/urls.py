@@ -23,6 +23,4 @@ urlpatterns = [
     path('cubes/upload/', CubeUploadView.as_view(), name='cube-upload'),
     path('current-user/', CurrentUserView.as_view(), name='current-user'),
     path('cards/update/', UpdateCardDatabaseView.as_view(), name='update-card-database'),
-    # Explicitly add the create_lobby endpoint
-    path('drafts/create-lobby/', DraftViewSet.as_view({'post': 'create_lobby'}), name='create-lobby'),
 ]

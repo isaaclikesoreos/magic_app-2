@@ -1,0 +1,83 @@
+Starting Mana 0
+
+
+
+storm puzzle 1 
+
+starting mana 17 blue, 14 red
+
+on battlefield
+oppo 4x thalia of thraben
+
+player battlefield: none
+
+player library from top to bottom
+lion's eye diamond
+lion's eye diamond
+
+
+lion's eye diamond
+end the festivites 
+tendrils of agony
+rite of flame
+rite of flame
+
+
+player hand 
+lotus petal x 3
+remand
+chemister's insight
+remand
+manamorphose
+faithless looting
+slickshot showoff
+rite of flame
+lion's eye diamond
+
+
+order
+
+chemister 18
+chemister 10
+petal   6
+remand 0
+end the festivites 
+petal 1
+rite 2
+manamorphose 2 
+led x 4
+27
+
+Hand, Karn, plaguecrafter, devil, goblin b, carrion feeder, raise the alarm
+
+board
+plaguelord,2 x adanto vanguard, 2 x token, goblin boom keg, 1 treasure token
+
+order
+Sac token and vangaurd, plaguelord to altar, a 6c
+play karn, animate goblin 0f
+sac both to altar 4c, 3 to angel
+sac 4 brigde zombies to ph altar 2b, 2r
+cast goblinn b, mayhem devil and bloodartist 1c floating
+sac last vangaurd to goblin b, finish off angel, loose brigde 2
+sac bridge token to finish off last 2 creatures 5
+sac blood artist to altar and treasue, 8 2b 1c
+cast plaguecafter, sacing it to self, 9
+sac devil to goblin 10
+
+snoop + krenko + sharpshooter
+
+start 3 red, 2 snoop, 2 tokens, 1 recruiter
+
+recruiter, 
+
+play skirk, sac 2 token, play dark dweller
+
+sac recruiter, exile sharpshooter
+
+snoop kenko, exile kenko, play kenko, copy kenko with snoop, sac tokens for kiki, play kiki copy kenko
+
+recruiter order: skirk, dweller, mob boss, sharpshooter, kiki
+sharpshooter, kiki, krenko, sharpshooter, kiki, krenko
+
+damage esitmate 20k

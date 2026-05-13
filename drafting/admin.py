@@ -17,7 +17,7 @@ class CustomUserAdmin(UserAdmin):
     )
 
 class CardAdmin(admin.ModelAdmin):
-    list_display = ('name', 'mana_cost', 'color', 'type_line', 'image')
+    list_display = ('name', 'mana_cost', 'color', 'type_line')
     search_fields = ('name',)
     list_filter = ('color', 'type_line')
 
@@ -31,7 +31,7 @@ class CardAdmin(admin.ModelAdmin):
 # Register models with admin
 admin.site.register(CustomUser, CustomUserAdmin)
 admin.site.register(Cube)
-admin.site.register(Card)
+admin.site.register(Card, CardAdmin)
 admin.site.register(Draft)
 admin.site.register(DeckList)
 admin.site.register(CubeCard)

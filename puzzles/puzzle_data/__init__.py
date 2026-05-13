@@ -1,0 +1,33 @@
+from puzzles.puzzle_data import (
+    bolt_the_bird,
+    alpha_strike,
+    swiftspear_prowess,
+    inferno_titan_rampage,
+    burn_them_out,
+    ancestral_knowledge,
+    storm_off,
+    furys_wrath,
+    masterminds_gambit,
+    sacrifice_combo,
+    wasteland_combo,
+    soul_sisters_combo,
+    pyromancer_pings,
+    kolaghan_command_test,
+)
+
+PUZZLE_REGISTRY = {
+    "bolt_the_bird": bolt_the_bird.PUZZLE,
+    "alpha_strike": alpha_strike.PUZZLE,
+    "swiftspear_prowess": swiftspear_prowess.PUZZLE,
+    "inferno_titan_rampage": inferno_titan_rampage.PUZZLE,
+    "burn_them_out": burn_them_out.PUZZLE,
+    "ancestral_knowledge": ancestral_knowledge.PUZZLE,
+    "storm_off": storm_off.PUZZLE,
+    "furys_wrath": furys_wrath.PUZZLE,
+    "masterminds_gambit": masterminds_gambit.PUZZLE,
+    "sacrifice_combo": sacrifice_combo.PUZZLE,
+    "wasteland_combo": wasteland_combo.PUZZLE,
+    "soul_sisters_combo": soul_sisters_combo.PUZZLE,
+    "pyromancer_pings": pyromancer_pings.PUZZLE,
+    "kolaghan_command_test": kolaghan_command_test.PUZZLE,
+}

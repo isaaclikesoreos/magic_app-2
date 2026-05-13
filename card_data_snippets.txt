@@ -1,0 +1,57 @@
+Myr Retriever card_data:
+{"triggered_abilities": [{"type": "triggered", "trigger": {"event": "permanent_dies", "source": "self"}, "effect": {"type": "return_from_graveyard_to_hand", "target": "artifact", "exclude_self": true}, "requires_input": true}]}
+
+Falkenrath Noble card_data:
+{"keywords": ["flying"], "triggered_abilities": [{"type": "triggered", "trigger": {"event": "permanent_dies", "source": "any"}, "effect": {"type": "opponent_loses_life", "amount": 1, "youGain": true}}]}
+
+Scrap Trawler card_data:
+{"triggered_abilities": [{"type": "triggered", "trigger": {"event": "permanent_dies", "source": "any", "condition": {"type": "has_card_type", "types": ["artifact"]}}, "effect": {"type": "return_from_graveyard_to_hand", "target": "artifact", "cmc_less_than_dying": true}, "requires_input": true}]}
+
+Day of Judgment card_data:
+{"spell_effect": {"type": "destroy_all", "filter": ["creature"]}}
+
+Cleansing Nova card_data:
+{"spell_effect": {"type": "modal_spell", "choose_count": 1, "modes": [{"description": "Destroy all creatures", "effect": {"type": "destroy_all", "filter": ["creature"]}, "targetType": "none"}, {"description": "Destroy all artifacts and enchantments", "effect": {"type": "destroy_all", "filter": ["artifact", "enchantment"]}, "targetType": "none"}]}}
+
+Flicker card_data:
+{"spell_effect": {"type": "flicker", "valid_targets": ["permanent"]}}
+
+Flickerwisp card_data:
+{"keywords": ["flying"], "triggered_abilities": [{"type": "triggered", "trigger": {"event": "enters_battlefield", "source": "self"}, "effect": {"type": "exile_until_end_step", "exclude_self": true}, "requires_input": true}]}
+
+Third Path Iconoclast card_data:
+{"triggered_abilities": [{"type": "triggered", "trigger": {"event": "noncreature_spell_cast", "source": "self"}, "effect": {"type": "create_token", "count": 1, "token": {"name": "Soldier", "type_line": "Artifact Creature — Soldier", "power": 1, "toughness": 1}}}]}
+
+Young Pyromancer card_data:
+{"triggered_abilities": [{"type": "triggered", "trigger": {"event": "noncreature_spell_cast", "source": "self", "condition": {"type": "spell_type", "spell_type": "instant_or_sorcery"}}, "effect": {"type": "create_token", "count": 1, "token": {"name": "Elemental", "type_line": "Creature — Elemental", "power": 1, "toughness": 1}}}]}
+
+Preordain card_data:
+{"spell_effect": {"type": "scry", "amount": 2, "then_draw": 1}}
+
+Consider card_data:
+{"spell_effect": {"type": "surveil", "amount": 1, "then_draw": 1}}
+
+Thraben Inspector card_data:
+{"triggered_abilities": [{"type": "triggered", "trigger": {"event": "enters_battlefield", "source": "self"}, "effect": {"type": "create_token", "count": 1, "token": {"name": "Clue", "type_line": "Token Artifact — Clue", "power": 0, "toughness": 0, "activated_abilities": [{"type": "activated", "cost": {"mana": {"generic": 2}, "sacrifice": {"self": true}}, "effect": {"type": "draw_cards", "amount": 1}, "timing": "instant", "description": "Draw a card"}]}}}]}
+
+Strike It Rich card_data:
+{"spell_effect": {"type": "create_token", "count": 1, "token": {"name": "Treasure", "type_line": "Token Artifact — Treasure", "power": 0, "toughness": 0, "activated_abilities": [{"type": "activated", "cost": {"tap": true, "sacrifice": {"self": true}}, "effect": {"type": "add_mana_any_color", "amount": 1}, "timing": "instant", "description": "Add one mana of any color"}]}}, "flashback": {"cost": "{2}{R}"}}
+
+Bake into a Pie card_data:
+{"spell_effect": {"type": "destroy", "valid_targets": ["creature"], "additional_effects": [{"type": "create_token", "count": 1, "token": {"name": "Food", "type_line": "Token Artifact — Food", "power": 0, "toughness": 0, "activated_abilities": [{"type": "activated", "cost": {"mana": {"generic": 2}, "tap": true, "sacrifice": {"self": true}}, "effect": {"type": "gain_life", "amount": 3}, "timing": "instant", "description": "You gain 3 life"}]}}]}}
+
+Descendant of Storms card_data:
+{"triggered_abilities": [{"type": "triggered", "trigger": {"event": "on_attack", "source": "self"}, "effect": {"type": "endure", "cost": {"generic": 1, "colored": {"W": 1}}, "value": 1}}]}
+
+Skymarcher Aspirant card_data:
+{"keywords": ["ascend"], "conditional_keywords": [{"keyword": "flying", "condition": "citys_blessing"}]}
+
+Secrets of the Golden City card_data:
+{"keywords": ["ascend"], "spell_effect": {"type": "draw_cards", "amount": 2, "amount_if_citys_blessing": 3}}
+
+Mire Triton card_data:
+{"keywords": ["deathtouch"], "triggered_abilities": [{"type": "triggered", "trigger": {"event": "enters_battlefield", "source": "self"}, "effect": {"type": "mill", "amount": 2, "additional_effects": [{"type": "gain_life", "amount": 2}]}}]}
+
+Basilisk Collar card_data:
+{"activated_abilities": [{"type": "activated", "cost": {"mana": {"generic": 2}}, "effect": {"type": "equip"}, "requires_target": true, "target_restriction": "your_creatures", "timing": "sorcery", "description": "Equip {2}"}], "static_abilities": [{"type": "static", "effect": {"type": "grant_keywords_equipped", "keywords": ["deathtouch", "lifelink"]}}]}
+ 

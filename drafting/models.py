@@ -81,13 +81,21 @@ class Card(models.Model):
 
 
 class Draft(models.Model):
+    STATUS_CHOICES = [
+        ('waiting', 'Waiting for Players'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+    ]
+
     id = models.AutoField(primary_key=True)
     cube = models.ForeignKey(Cube, on_delete=models.CASCADE, related_name='drafts')
     pack_count = models.IntegerField(default=3)
     cards_per_pack = models.IntegerField(default=15)
     player_count = models.IntegerField()
     active = models.BooleanField(default=True)
-  # Stores the list of cards in this draft as JSON
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='waiting')
+    current_pack = models.IntegerField(default=1)  # Which pack number (1, 2, 3)
+    current_pick = models.IntegerField(default=1)  # Which pick within the pack
 
     def __str__(self):
         return f"Draft for {self.cube.name}"
@@ -108,12 +116,41 @@ class DraftPlayer(models.Model):
     draft = models.ForeignKey(Draft, on_delete=models.CASCADE, related_name='players')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='drafts_participated')
     role = models.CharField(max_length=50, null=True, blank=True)
+    seat_position = models.IntegerField(default=0)  # Position at the draft table (for pack passing)
 
     class Meta:
         unique_together = ('draft', 'user')  # Ensures each player is unique in a draft
 
     def __str__(self):
         return f"{self.user.email} in {self.draft.cube.name} draft"
+
+
+class DraftPack(models.Model):
+    """Represents a pack of cards in the draft"""
+    draft = models.ForeignKey(Draft, on_delete=models.CASCADE, related_name='packs')
+    pack_number = models.IntegerField()  # Which round this pack belongs to (1, 2, 3)
+    original_player = models.ForeignKey(DraftPlayer, on_delete=models.CASCADE, related_name='original_packs')
+    current_player = models.ForeignKey(DraftPlayer, on_delete=models.CASCADE, related_name='current_packs')
+    cards = models.ManyToManyField(Card, related_name='in_draft_packs')
+
+    def __str__(self):
+        return f"Pack {self.pack_number} for {self.draft}"
+
+
+class DraftPick(models.Model):
+    """Tracks each pick made during the draft"""
+    draft = models.ForeignKey(Draft, on_delete=models.CASCADE, related_name='picks')
+    player = models.ForeignKey(DraftPlayer, on_delete=models.CASCADE, related_name='picks')
+    card = models.ForeignKey(Card, on_delete=models.CASCADE, related_name='draft_picks')
+    pack_number = models.IntegerField()  # Which pack round
+    pick_number = models.IntegerField()  # Which pick within the pack
+    picked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('draft', 'player', 'card')
+
+    def __str__(self):
+        return f"{self.player.user.email} picked {self.card.name}"
 
 
 class DeckList(models.Model):
