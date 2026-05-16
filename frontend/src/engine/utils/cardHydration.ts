@@ -21,6 +21,7 @@ interface CardDefinition {
   colors?: string;
   power?: string;
   toughness?: string;
+  images?: { image_url: string; image_type?: string; is_primary?: boolean }[];
   abilities?: {
     keywords?: string[];
     triggered?: any[];
@@ -122,6 +123,7 @@ function hydrateCardInstance(instance: Partial<Card>, definition: CardDefinition
     colors,
     power: definition.power,
     toughness: definition.toughness,
+    images: (definition as any).images,
     // Abilities from abilities object (standardized format)
     keywords: definition.abilities?.keywords || [],
     triggered_abilities: definition.abilities?.triggered || [],

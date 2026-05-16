@@ -24,6 +24,7 @@ export interface Card {
   toughness?: string;
   colors: string[];
   image_url?: string;
+  images?: { image_url: string; image_type?: string; is_primary?: boolean }[];
   is_token: boolean;
   isBasic?: boolean;  // For basic lands
   isLand?: boolean;   // For land permanents

@@ -112,6 +112,7 @@ const GodModePanel: FC = () => {
         colors,
         power: cardData.power,
         toughness: cardData.toughness,
+        images: (cardData as any).images,
         is_token: false,
         keywords: cardData.abilities?.keywords || [],
         triggered_abilities: cardData.abilities?.triggered || [],

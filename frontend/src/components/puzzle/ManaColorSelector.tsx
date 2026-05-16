@@ -7,6 +7,11 @@ const ManaColorSelector: FC = () => {
   if (!manaColorSelection) return null;
 
   const amount = manaColorSelection.amount || 1;
+  const perPick = !!manaColorSelection.perPick;
+  const picked = manaColorSelection.picked || 0;
+  const remaining = perPick ? amount - picked : amount;
+  // In per-pick mode each click adds 1 mana. Otherwise one click scales by amount.
+  const perClickAmount = perPick ? 1 : amount;
 
   const manaColors = [
     { color: 'W', bgClass: 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800' },
@@ -19,9 +24,14 @@ const ManaColorSelector: FC = () => {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-gray-900 border-2 border-purple-500 rounded-lg p-6 shadow-xl">
-        <div className="text-white font-semibold mb-4 text-center">
+        <div className="text-white font-semibold mb-1 text-center">
           {manaColorSelection.sourceCard?.name} - Select Mana Color
         </div>
+        {perPick && (
+          <div className="text-purple-300 text-xs text-center mb-3">
+            Pick {picked + 1} of {amount}
+          </div>
+        )}
         <div className="flex gap-3">
           {manaColors.map(({ color, bgClass }) => (
             <button
@@ -29,14 +39,16 @@ const ManaColorSelector: FC = () => {
               onClick={() => selectManaColor(color)}
               className={`w-16 h-16 rounded-lg font-bold text-2xl transition ${bgClass} flex items-center justify-center`}
             >
-              {amount > 1 ? `${amount}x{${color}}` : `{${color}}`}
+              {perClickAmount > 1 ? `${perClickAmount}x{${color}}` : `{${color}}`}
             </button>
           ))}
         </div>
         <div className="text-gray-400 text-xs text-center mt-3">
-          {amount > 1
-            ? `Click to add ${amount} mana of that color to your pool`
-            : 'Click to add one mana of that color to your pool'}
+          {perPick
+            ? `Click to add 1 mana of that color (${remaining} remaining)`
+            : perClickAmount > 1
+              ? `Click to add ${perClickAmount} mana of that color to your pool`
+              : 'Click to add one mana of that color to your pool'}
         </div>
         <button
           onClick={cancelManaColorSelection}

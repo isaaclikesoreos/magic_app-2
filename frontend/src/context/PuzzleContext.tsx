@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode, FC } from 'react';
 import { applyEffect } from '../engine/effects';
-import { calculatePower } from '../engine/utils/powerToughness';
+import { calculatePower, calculateToughness } from '../engine/utils/powerToughness';
 import { getEffectiveActivatedAbilities } from '../engine/utils/grantedAbilities';
 import { canActivateTapAbility } from '../engine/utils/summoningSickness';
 import { isPlaneswalker, getLoyalty, addLoyalty } from '../engine/utils/loyalty';
@@ -70,6 +70,12 @@ interface ManaColorSelectionState {
   sourceCard: Permanent;
   stackItemId: string;
   amount?: number;
+  // perPick=true means the player picks the color of each mana separately —
+  // "two mana in any combination of colors" (Manamorphose). Default false
+  // means one color choice scales by amount — "three mana of any one color"
+  // (Black Lotus, LED, Lotus Bloom).
+  perPick?: boolean;
+  picked?: number;                      // How many mana already picked when perPick
   preActivationState?: GameState;       // Snapshot to restore on cancel
   preActivationStackLength?: number;    // Stack length to restore on cancel
 }
@@ -406,6 +412,7 @@ interface PuzzleContextValue {
   confirmImprovise: () => void;
   cancelImprovise: () => void;
   startSuspend: (card: Card) => void;
+  startPlot: (card: Card) => void;
   suspendCastPending: { card: Card } | null;
   acceptSuspendCast: () => void;
   declineSuspendCast: () => void;
@@ -883,12 +890,13 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
         // Increment turn counter
         newState.turnNumber = (newState.turnNumber || 1) + 1;
 
-        // Expire impulse-drawn cards whose playability has ended
+        // Expire impulse-drawn cards whose playability has ended.
+        // Plotted cards bypass this — they're castable for the rest of the game
+        // until the player casts them.
         if (newState.impulsedCards && newState.impulsedCards.length > 0) {
           const currentTurn = newState.turnNumber;
-          const expired = newState.impulsedCards.filter(ic => ic.expiresAtTurnEnd < currentTurn);
+          const expired = newState.impulsedCards.filter(ic => !ic.plotted && ic.expiresAtTurnEnd < currentTurn);
           if (expired.length > 0) {
-            // Remove exileReason tag from expired cards so they show as permanently exiled
             expired.forEach(ic => {
               const exileCard = newState.players[ic.owner].exile?.find(
                 (c: any) => c.instance_id === ic.card.instance_id
@@ -898,7 +906,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
               }
             });
           }
-          newState.impulsedCards = newState.impulsedCards.filter(ic => ic.expiresAtTurnEnd >= currentTurn);
+          newState.impulsedCards = newState.impulsedCards.filter(ic => ic.plotted || ic.expiresAtTurnEnd >= currentTurn);
           if (newState.impulsedCards.length === 0) {
             delete newState.impulsedCards;
           }
@@ -1425,16 +1433,19 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       return;
     }
 
-    // Check mana and cast
+    // Check mana and cast (skip charging when an alternate cost was already paid,
+    // e.g. Plot cards being cast from exile for free).
+    const altCostAlreadyPaid = !!(card as any)._altCostPaid;
     const parsedCost = parseManaCost(card.mana_cost);
     const reduction = getCostReduction(card);
-    if (!canAffordCost(parsedCost, gameState.players.you.mana_pool, 0, reduction)) {
-      addLog(`Not enough mana to cast ${card.name}`);
-      return;
+    let newManaPool = gameState.players.you.mana_pool;
+    if (!altCostAlreadyPaid) {
+      if (!canAffordCost(parsedCost, gameState.players.you.mana_pool, 0, reduction)) {
+        addLog(`Not enough mana to cast ${card.name}`);
+        return;
+      }
+      newManaPool = spendMana(gameState.players.you.mana_pool, parsedCost, 0, reduction);
     }
-
-    // Spend mana
-    const newManaPool = spendMana(gameState.players.you.mana_pool, parsedCost, 0, reduction);
 
     // Check if this is a permanent spell (creatures/artifacts/enchantments enter battlefield)
     const typeLine = card.type_line?.toLowerCase() || '';
@@ -2855,21 +2866,97 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       return;
     }
 
-    // target_player_sacrifice — when YOU are the target, the player must
-    // choose which creature to sacrifice (auto-pick is opponent-only). Open
-    // sacrificeMode with actor='you', stash the choice on the stack item via
-    // _chosenSacs, then resume resolveStack so applyTargetPlayerSacrifice
-    // can read the stash. Opponent-target falls through to auto-pick.
+    // target_player_sacrifice — multi-mode:
+    //   1) Single-target edict (Cruel Edict, Geth's Verdict). targeting_data.targetData
+    //      = 'you' | 'opponent'. If 'you', prompt sacrificeMode; if 'opponent', fall
+    //      through to handler for auto-pick.
+    //   2) each_player: true (Plaguecrafter). Runs in two phases — opponent first
+    //      (auto), then YOU. fallback_discard: true forces a discard when a player
+    //      has no valid sacrifice target. Phase progress is tracked on the stack
+    //      item via _eachPlayerOppDone / _chosenSacs.
     if (topItem.effect?.type === 'target_player_sacrifice' && (topItem.effect as any)._chosenSacs === undefined) {
-      const targetPlayer = (topItem.targeting_data?.targetData as 'you' | 'opponent') || 'opponent';
+      const eachPlayer = !!(topItem.effect as any).each_player;
+      const fallbackDiscard = !!(topItem.effect as any).fallback_discard;
+      const types = (topItem.effect.types as string[]) || ['creature'];
+      const count = (topItem.effect.count as number) || 1;
+
+      // --- Phase 1 (each_player only): opponent fires synchronously ---
+      if (eachPlayer && !(topItem.effect as any)._eachPlayerOppDone) {
+        const oppCandidates = (gameState.players.opponent.battlefield || []).filter(p =>
+          matchesSacFilter(p, 'opponent', { types, controller: 'opponent' })
+        );
+
+        const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
+        const dyingArr = newState._dyingCreatures = newState._dyingCreatures || [];
+        const leavingArr = newState._leavingPermanents = newState._leavingPermanents || [];
+        const sacArr = newState._sacrificedPermanents = newState._sacrificedPermanents || [];
+
+        if (oppCandidates.length > 0) {
+          const picked = autoPickSacrifices(oppCandidates, count);
+          for (const c of picked) {
+            newState.players.opponent.battlefield = newState.players.opponent.battlefield.filter(
+              (p: Permanent) => p.instance_id !== c.instance_id
+            );
+            pushToGraveyardOrExile(newState, newState.players.opponent, c);
+            addLog(`Opponent sacrifices ${c.name}.`);
+            if ((c.type_line || '').toLowerCase().includes('creature')) {
+              dyingArr.push({ creature: c, owner: 'opponent' });
+            }
+            leavingArr.push({ permanent: c, owner: 'opponent' });
+            sacArr.push({ permanent: c, owner: 'opponent' });
+          }
+        } else if (fallbackDiscard && (newState.players.opponent.hand?.length || 0) > 0) {
+          const hand = newState.players.opponent.hand || [];
+          const shuffled = [...hand].sort(() => Math.random() - 0.5);
+          const discarded = shuffled.slice(0, count);
+          for (const card of discarded) {
+            newState.players.opponent.hand = newState.players.opponent.hand.filter(
+              (c: any) => c.instance_id !== (card as any).instance_id
+            );
+            pushToGraveyardOrExile(newState, newState.players.opponent, card);
+            addLog(`Opponent discards ${(card as any).name}.`);
+          }
+        } else {
+          addLog(`Opponent has nothing to sacrifice${fallbackDiscard ? ' or discard' : ''}.`);
+        }
+
+        setGameState(newState);
+        setStack(prev => prev.map(item =>
+          item.id === topItem.id
+            ? { ...item, effect: { ...item.effect, _eachPlayerOppDone: true } }
+            : item
+        ));
+        if (!holdingPriority) setTimeout(() => resolveStackRef.current(), 100);
+        return;
+      }
+
+      // --- Phase 2 (or single-target with target=you): YOU phase ---
+      const targetPlayer = eachPlayer ? 'you' : ((topItem.targeting_data?.targetData as 'you' | 'opponent') || 'opponent');
       if (targetPlayer === 'you') {
-        const types = (topItem.effect.types as string[]) || ['creature'];
-        const count = (topItem.effect.count as number) || 1;
         const candidates = (gameState.players.you.battlefield || []).filter(p =>
           matchesSacFilter(p, 'you', { types, controller: 'you' })
         );
-        // No eligible permanents — mark resolved with empty array, handler logs and skips.
         if (candidates.length === 0) {
+          // No valid sac. If fallback_discard, prompt discard; else complete empty.
+          if (fallbackDiscard && (gameState.players.you.hand?.length || 0) > 0) {
+            // Mark sac portion as resolved with no picks; the discard runs out-of-band
+            // via discardSelectionState. completeDiscard re-enters resolveStack.
+            setStack(prev => prev.map(item =>
+              item.id === topItem.id
+                ? { ...item, effect: { ...item.effect, _chosenSacs: [] } }
+                : item
+            ));
+            const handSize = gameState.players.you.hand.length;
+            const actualCount = Math.min(count, handSize);
+            setDiscardSelectionState({
+              count: actualCount,
+              reason: `${topItem.source.name} (you can't sacrifice)`,
+              targetPlayer: 'you',
+            });
+            addLog(`${topItem.source.name}: You have nothing to sacrifice — discard ${actualCount} card(s).`);
+            return;
+          }
+          // Neither sac nor discard available — log and complete.
           setStack(prev => prev.map(item =>
             item.id === topItem.id
               ? { ...item, effect: { ...item.effect, _chosenSacs: [] } }
@@ -2880,8 +2967,6 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
         }
         const stackItemId = topItem.id;
         const reopenPrompt = () => {
-          // Forced sacrifice — can't cancel mid-resolution. Re-fire by tickling
-          // resolveStack. Use resolveStackRef to dodge the stale-closure trap.
           if (!holdingPriority) setTimeout(() => resolveStackRef.current(), 100);
         };
         setSacrificeMode({
@@ -2896,9 +2981,6 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
                 ? { ...item, effect: { ...item.effect, _chosenSacs: selected } }
                 : item
             ));
-            // resolveStackRef points at the latest resolveStack — critical so
-            // the next pass sees the _chosenSacs we just set instead of the
-            // stale stack captured when this onComplete closure was created.
             if (!holdingPriority) setTimeout(() => resolveStackRef.current(), 100);
           },
           onCancel: reopenPrompt,
@@ -2912,7 +2994,9 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       setManaColorSelection({
         sourceCard: topItem.source as unknown as Permanent,
         stackItemId: topItem.id,
-        amount: topItem.effect.amount
+        amount: topItem.effect.amount,
+        perPick: !!(topItem.effect as any).per_pick,
+        picked: 0,
       });
       return;
     }
@@ -4507,6 +4591,57 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       });
     }
   }, [gameState]);
+
+  // State-based action: creatures with effective toughness ≤ 0 die.
+  // Covers buff-induced toughness drops (Phyrexian Plaguelord -X/-X EOT) and any
+  // path that lowers toughness without going through damage.ts (which handles its
+  // own death sweep inline). Death triggers (Blood Artist, Mayhem Devil sac-pings,
+  // etc.) are dispatched here as well so aristocrats engines chain correctly.
+  useEffect(() => {
+    if (!gameState) return;
+    const dying: Array<{ creature: Permanent; owner: PlayerKey }> = [];
+    for (const playerKey of ['you', 'opponent'] as PlayerKey[]) {
+      const player = gameState.players[playerKey];
+      for (const perm of player.battlefield || []) {
+        const tl = (perm.type_line || '').toLowerCase();
+        if (tl.includes('creature') && calculateToughness(perm) <= 0) {
+          dying.push({ creature: perm, owner: playerKey });
+        }
+      }
+    }
+    if (dying.length === 0) return;
+
+    // Snapshot post-removal state for trigger detection — death triggers
+    // typically care about the dying creature, not its presence on the board.
+    const snapshot = JSON.parse(JSON.stringify(gameState)) as GameState;
+    for (const { creature, owner } of dying) {
+      snapshot.players[owner].battlefield = (snapshot.players[owner].battlefield || []).filter(
+        c => c.instance_id !== creature.instance_id
+      );
+    }
+
+    setGameState(prev => {
+      if (!prev) return prev;
+      const newState = JSON.parse(JSON.stringify(prev)) as GameState;
+      for (const { creature, owner } of dying) {
+        const player = newState.players[owner];
+        // Skip if already removed by something else this cycle (avoid double-routing).
+        if (!(player.battlefield || []).some(c => c.instance_id === creature.instance_id)) continue;
+        removeAttachedAuras(newState, creature.instance_id || '');
+        player.battlefield = (player.battlefield || []).filter(c => c.instance_id !== creature.instance_id);
+        pushToGraveyardOrExile(newState, player, creature);
+        addLog(`${creature.name} dies (toughness ≤ 0).`);
+      }
+      return newState;
+    });
+
+    // Dispatch death triggers — these reach the stack and chain via the
+    // existing resolveStack loop.
+    for (const { creature, owner } of dying) {
+      const deathTriggers = checkTriggersForEvent('creature_died', { creature, owner }, snapshot);
+      deathTriggers.forEach(t => addToStack(t));
+    }
+  }, [gameState, addLog, addToStack]);
 
   // State-based action: Ascend — grant city's blessing when a permanent with ascend is on
   // the battlefield and you control 10+ permanents. Once granted, never lost.
@@ -6710,6 +6845,63 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     addLog(`Suspended ${card.name} with ${timeCounters} time counter${timeCounters !== 1 ? 's' : ''} (${suspendCostStr})`);
   }, [gameState, addLog]);
 
+  // Plot (Outlaws of Thunder Junction): pay Plot cost as a sorcery, exile face-up.
+  // On any later turn, cast it from exile without paying its mana cost (sorcery
+  // speed). Plotted cards live alongside impulse-drawn cards in `impulsedCards`
+  // with `plotted: true` so they skip end-of-turn cleanup and gate cast on turn.
+  const startPlot = useCallback((card: Card) => {
+    if (!gameState) return;
+
+    const plotMatch = card.oracle_text?.match(/Plot\s+(\{[^}]+\}(?:\{[^}]+\})*)/i);
+    if (!plotMatch) {
+      addLog(`${card.name} has no plot cost`);
+      return;
+    }
+    const plotCostStr = plotMatch[1];
+    const parsedCost = parseManaCost(plotCostStr);
+
+    if (!canAffordCost(parsedCost, gameState.players.you.mana_pool)) {
+      addLog(`Not enough mana to plot ${card.name} (${plotCostStr})`);
+      return;
+    }
+    const newManaPool = spendMana(gameState.players.you.mana_pool, parsedCost);
+    const currentTurn = gameState.turnNumber || 1;
+
+    setGameState(prev => {
+      if (!prev) return prev;
+      const plottedCard = {
+        ...card,
+        instance_id: card.instance_id || `plot-${card.card_id}-${Date.now()}`,
+        exileReason: 'plotted',
+      } as any;
+      return {
+        ...prev,
+        players: {
+          ...prev.players,
+          you: {
+            ...prev.players.you,
+            hand: prev.players.you.hand.filter(c => c.instance_id !== card.instance_id),
+            exile: [...(prev.players.you.exile || []), plottedCard],
+            mana_pool: newManaPool,
+          }
+        },
+        impulsedCards: [
+          ...(prev.impulsedCards || []),
+          {
+            card: plottedCard,
+            owner: 'you' as PlayerKey,
+            // Sentinel — plotted entries are filtered by the `plotted` flag, not by turn.
+            expiresAtTurnEnd: Number.MAX_SAFE_INTEGER,
+            plotted: true,
+            castableFromTurn: currentTurn + 1,
+          },
+        ],
+      };
+    });
+
+    addLog(`Plotted ${card.name} (${plotCostStr}). Cast it as a sorcery on a later turn.`);
+  }, [gameState, addLog]);
+
   // Accept casting a card whose suspend counters have been fully removed
   const acceptSuspendCast = useCallback(() => {
     if (!suspendCastPending || !gameState) return;
@@ -8355,30 +8547,55 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
   const selectManaColor = useCallback((color: string) => {
     if (!gameState || !manaColorSelection) return;
 
-    const amount = manaColorSelection.amount || 1;
+    const totalAmount = manaColorSelection.amount || 1;
+    const perPick = !!manaColorSelection.perPick;
+    const alreadyPicked = manaColorSelection.picked || 0;
+
+    // In per-pick mode, each click adds 1 mana and we only finalize on the last pick.
+    // Otherwise (Black Lotus / LED style), one click adds the full amount and finalizes.
+    const manaToAddThisClick = perPick ? 1 : totalAmount;
+    const isLastPick = !perPick || alreadyPicked + 1 >= totalAmount;
+
+    const pausedItem = manaColorSelection.stackItemId
+      ? stack.find(item => item.id === manaColorSelection.stackItemId)
+      : null;
+    const additional = pausedItem?.effect?.additional_effects;
 
     setGameState(prev => {
       if (!prev) return prev;
       const manaPool = { ...prev.players.you.mana_pool };
-      manaPool[color] = (manaPool[color] || 0) + amount;
-
-      return {
+      manaPool[color] = (manaPool[color] || 0) + manaToAddThisClick;
+      let newState: GameState = {
         ...prev,
         players: {
           ...prev.players,
           you: { ...prev.players.you, mana_pool: manaPool }
         }
       };
+
+      // Chain additional_effects (e.g. Manamorphose's draw) only when we're done picking.
+      if (isLastPick && additional && pausedItem) {
+        for (const addlEffect of additional) {
+          const tempItem = { ...pausedItem, effect: addlEffect } as typeof pausedItem;
+          newState = applyEffect(tempItem, newState, { addLog });
+        }
+      }
+      return newState;
     });
 
-    // Pop the stack item if one exists (stack-based path, e.g. Phyrexian Altar)
-    if (manaColorSelection.stackItemId) {
-      setStack(prev => prev.filter(item => item.id !== manaColorSelection.stackItemId));
-    }
-    setManaColorSelection(null);
-    const manaLabel = amount > 1 ? `${amount}x {${color}}` : `{${color}}`;
+    const manaLabel = manaToAddThisClick > 1 ? `${manaToAddThisClick}x {${color}}` : `{${color}}`;
     addLog(`Added ${manaLabel} to mana pool`);
-  }, [gameState, manaColorSelection, addLog]);
+
+    if (isLastPick) {
+      if (manaColorSelection.stackItemId) {
+        setStack(prev => prev.filter(item => item.id !== manaColorSelection.stackItemId));
+      }
+      setManaColorSelection(null);
+    } else {
+      // Stay open for the next pick
+      setManaColorSelection(prev => prev ? { ...prev, picked: alreadyPicked + 1 } : prev);
+    }
+  }, [gameState, manaColorSelection, addLog, stack]);
 
   const cancelManaColorSelection = useCallback(() => {
     if (manaColorSelection?.preActivationState) {
@@ -9544,6 +9761,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     confirmPhyrexianCast,
     cancelPhyrexianCast,
     startSuspend,
+    startPlot,
     suspendCastPending,
     acceptSuspendCast,
     declineSuspendCast,

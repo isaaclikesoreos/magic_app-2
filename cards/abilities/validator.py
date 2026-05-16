@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple, Optional
 # Valid values for various ability fields
 VALID_TRIGGER_EVENTS = {
     # Zone changes
-    'enters_battlefield', 'etb', 'leaves_battlefield', 'dies',
+    'enters_battlefield', 'etb', 'leaves_battlefield', 'dies', 'permanent_dies',
     # Combat
     'on_attack', 'on_block', 'deals_combat_damage', 'attacks_or_blocks',
     # Spells
@@ -46,7 +46,7 @@ VALID_EFFECT_TYPES = {
     # Battlefield
     'enter_battlefield', 'enter_battlefield_permanent', 'create_token',
     'destroy', 'sacrifice', 'sacrifice_self', 'return_to_hand',
-    'destroy_land', 'wildfire',
+    'destroy_land', 'wildfire', 'target_player_sacrifice',
     # Roles
     'attach_role', 'create_role',
     # Equipment
@@ -54,7 +54,7 @@ VALID_EFFECT_TYPES = {
     # Counter spells
     'counter_spell', 'counter_return_to_hand', 'counter_unless_pay',
     # Untap / equipment
-    'untap_self', 'attach_self_to_triggering_creature', 'equip',
+    'untap_self', 'attach_self_to_triggering_creature', 'equip', 'doesnt_untap',
     # Granted abilities (equipment)
     'grant_triggered_equipped', 'grant_activated_equipped',
     # Planeswalker effects

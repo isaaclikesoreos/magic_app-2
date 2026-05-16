@@ -97,7 +97,15 @@ export interface GameState {
   exiledUnder?: Record<string, Array<{ card: Card; owner: PlayerKey; exilerInstanceId: string }>>;
 
   // Cards exiled face-up that can be played (impulse draw — Reckless Impulse, etc.)
-  impulsedCards?: Array<{ card: Card; owner: PlayerKey; expiresAtTurnEnd: number }>;
+  // Plotted cards (Outlaws of Thunder Junction) share this array but with the
+  // `plotted` flag — they never expire and gate cast on `castableFromTurn`.
+  impulsedCards?: Array<{
+    card: Card;
+    owner: PlayerKey;
+    expiresAtTurnEnd: number;
+    plotted?: boolean;
+    castableFromTurn?: number;
+  }>;
 
   // Turn counter (used for impulse draw expiration)
   turnNumber?: number;

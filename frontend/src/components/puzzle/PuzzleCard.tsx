@@ -4,6 +4,7 @@ import { getEffectiveActivatedAbilities } from '../../engine/utils/grantedAbilit
 import { canActivateTapAbility } from '../../engine/utils/summoningSickness';
 import { Card, Permanent, PlayerKey, Cost } from '@/types';
 import { matchesSacFilter } from '../../engine/utils/sacFilter';
+import CachedCardImage from '../CachedCardImage';
 
 // Helper to format activated ability costs
 const formatActivatedCost = (cost: Cost | string | undefined): string => {
@@ -84,6 +85,7 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
     startEmerge,
     startPhyrexianCast,
     startSuspend,
+    startPlot,
     activateAbility,
     tapLandForMana,
     getLandManaAbilities,
@@ -152,10 +154,14 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
   // Flashback: can cast instants/sorceries from graveyard for flashback cost
   const canCastFlashback = isInGraveyard && owner === 'you' && !isTargeting &&
     !canCastFromGraveyard && !!((card as any).flashback?.cost || (card as any).flashback?.sacrifice);
-  // Impulse draw: can play cards exiled face-up (Reckless Impulse)
+  // Impulse draw / Plot: can play cards exiled face-up.
+  // Plotted cards add a turn gate — they're only castable on a turn AFTER the
+  // one they were plotted on (and only at sorcery speed, which the cast path
+  // already enforces).
   const isInExile = location === 'exile';
-  const canPlayFromExile = isInExile && owner === 'you' && !isTargeting &&
-    !!(gameState?.impulsedCards?.some(ic => ic.card.instance_id === card.instance_id));
+  const _impulseEntry = gameState?.impulsedCards?.find(ic => ic.card.instance_id === card.instance_id);
+  const _plotReady = !_impulseEntry?.plotted || (_impulseEntry.castableFromTurn ?? 0) <= (gameState?.turnNumber ?? 0);
+  const canPlayFromExile = isInExile && owner === 'you' && !isTargeting && !!_impulseEntry && _plotReady;
   // Snapcaster Mage targeting: instant/sorcery in graveyard
   const isInstantOrSorcery = ((card.type_line || '').toLowerCase().includes('instant') ||
     (card.type_line || '').toLowerCase().includes('sorcery'));
@@ -331,6 +337,7 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
 
   // Check if card has suspend
   const hasSuspend = !!card.oracle_text?.match(/Suspend\s+\d+/i);
+  const hasPlot = !!card.oracle_text?.match(/Plot\s+\{/i);
 
   // Check if card has impending
   const hasImpending = !!card.oracle_text?.match(/Impending\s+\d+/i);
@@ -619,11 +626,16 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
       return;
     }
 
-    // Impulse draw: play a card from exile
+    // Impulse draw / Plot: play a card from exile.
+    // Plotted cards are cast without paying their mana cost — mark with
+    // _altCostPaid so the cast pipeline skips the mana spend.
     if (canPlayFromExile && !isDeclaringAttackers && !stormTargetingState && !copyTargetingState && !sacrificeMode && selectCardFromHand) {
       const rect = cardRef.current?.getBoundingClientRect();
       if (rect) {
-        selectCardFromHand(card as Card, rect);
+        const cardToCast = _impulseEntry?.plotted
+          ? ({ ...card, _altCostPaid: true } as Card)
+          : (card as Card);
+        selectCardFromHand(cardToCast, rect);
       }
       return;
     }
@@ -787,6 +799,12 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
     // Suspend: exile from hand with time counters
     if (isInHand && owner === 'you' && hasSuspend && startSuspend) {
       startSuspend(card as Card);
+      return;
+    }
+
+    // Plot: exile from hand, castable for free on a later turn
+    if (isInHand && owner === 'you' && hasPlot && startPlot) {
+      startPlot(card as Card);
       return;
     }
 
@@ -1041,22 +1059,27 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
       onContextMenu={handleRightClick}
     >
       <div
-        className={`w-20 h-28 bg-gray-800 rounded-lg border-2 ${borderClass} p-1 flex flex-col overflow-hidden transition-all cursor-pointer ${blockedByTiming ? 'opacity-40' : ''}`}
+        className={`w-20 h-28 bg-gray-800 rounded-lg border-2 ${borderClass} flex flex-col overflow-hidden transition-all cursor-pointer relative ${blockedByTiming ? 'opacity-40' : ''}`}
       >
-        {/* Card name */}
-        <div className="text-xs font-semibold text-white truncate">{card.name}</div>
+        {/* Card art (background) */}
+        <CachedCardImage
+          card={card as any}
+          className="absolute inset-0 w-full h-full"
+        />
 
-        {/* Mana cost */}
-        <div className={`text-xs truncate ${hasPowerCostReduction && costReduction > 0 && isInHand ? 'text-green-400' : 'text-gray-400'}`}>
-          {hasPowerCostReduction && costReduction > 0 && isInHand ? reducedManaCost : card.mana_cost}
+        {/* Top label: card name + mana cost (only if cost was reduced, otherwise the printed cost on the art suffices) */}
+        <div className="relative z-[1] px-1 pt-0.5 bg-gradient-to-b from-black/80 to-transparent">
+          <div className="text-[10px] font-semibold text-white truncate leading-tight">{card.name}</div>
+          {hasPowerCostReduction && costReduction > 0 && isInHand && (
+            <div className="text-[10px] truncate text-green-400 leading-tight">
+              {reducedManaCost} <span className="line-through text-gray-500">{card.mana_cost}</span>
+            </div>
+          )}
         </div>
 
-        {/* Card type */}
-        <div className="text-xs text-gray-500 truncate mt-auto">{card.type_line?.split(' - ')[0]}</div>
-
-        {/* Power/Toughness for creatures */}
+        {/* Bottom right: P/T (creatures) or loyalty handled by the existing badge below */}
         {isCreature && (
-          <div className={`text-xs font-bold text-right ${hasBuffs ? 'text-green-400' : 'text-white'}`}>
+          <div className={`absolute bottom-0.5 right-1 z-[1] text-xs font-bold px-1 rounded bg-black/70 ${hasBuffs ? 'text-green-400' : 'text-white'}`}>
             {displayPower}/{displayToughness}
           </div>
         )}
@@ -1139,6 +1162,13 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
         {hasSuspend && isInHand && owner === 'you' && !hasEvoke && !hasDash && (
           <div className="absolute top-0 left-0 w-4 h-4 bg-blue-500 rounded-full text-xs flex items-center justify-center font-bold text-white transform -translate-x-1 -translate-y-1">
             S
+          </div>
+        )}
+
+        {/* Plot indicator (in hand) */}
+        {hasPlot && isInHand && owner === 'you' && !hasEvoke && !hasDash && !hasSuspend && (
+          <div className="absolute top-0 left-0 w-4 h-4 bg-purple-500 rounded-full text-xs flex items-center justify-center font-bold text-white transform -translate-x-1 -translate-y-1" title="Right-click to plot">
+            P
           </div>
         )}
 
@@ -1593,6 +1623,9 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
           )}
           {isInHand && owner === 'you' && hasSuspend && (
             <div className="text-xs text-blue-400">Right-click to suspend</div>
+          )}
+          {isInHand && owner === 'you' && hasPlot && !hasSuspend && (
+            <div className="text-xs text-purple-400">Right-click to plot</div>
           )}
           {isInHand && owner === 'you' && hasOverload && (
             <div className="text-xs text-red-400">Right-click to overload</div>

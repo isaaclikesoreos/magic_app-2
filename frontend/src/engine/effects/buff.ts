@@ -40,7 +40,8 @@ export const applyBuffCreature = (
       } else {
         creature.buffPower = (creature.buffPower || 0) + powerBuff;
         creature.buffToughness = (creature.buffToughness || 0) + toughnessBuff;
-        addLog(`${stackItem.source.name} gives ${creature.name} +${powerBuff}/+${toughnessBuff} until end of turn.`);
+        const sign = (n: number) => (n >= 0 ? `+${n}` : String(n));
+        addLog(`${stackItem.source.name} gives ${creature.name} ${sign(powerBuff)}/${sign(toughnessBuff)} until end of turn.`);
 
         if (stackItem.effect.grantsTrample) {
           creature.hasTrample = true;
