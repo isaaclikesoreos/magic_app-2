@@ -69,7 +69,13 @@ const applyDamageToPermanent = (
   const toughness = calculateToughness(permanent);
   const marked = permanent.damage;
   const deathtouched = permanent.damaged_by_deathtouch === true;
-  const isLethal = marked >= toughness || deathtouched;
+  const wouldBeLethal = marked >= toughness || deathtouched;
+  // Indestructible saves from the lethal-damage SBA (rule 704.5g) and from
+  // destroy effects, but NOT from 0 toughness (704.5f, handled by a separate
+  // toughness SBA in PuzzleContext). Damage is still marked on the creature
+  // so reflective effects (Stuffy Doll-style) and lifelink still apply.
+  const hasIndestructible = (permanent as any).keywords?.includes('indestructible');
+  const isLethal = wouldBeLethal && !hasIndestructible;
   if (isLethal) {
     removeAttachedAuras(newState, permanent.instance_id);
     ownerPlayer.battlefield = ownerPlayer.battlefield.filter(
@@ -84,7 +90,11 @@ const applyDamageToPermanent = (
     addLog(`${sourceName} deals ${damage} damage to ${permanent.name}, ${deathReason}.`);
     return true;
   }
-  addLog(`${sourceName} deals ${damage} damage to ${permanent.name} (${marked}/${toughness} marked).`);
+  if (wouldBeLethal && hasIndestructible) {
+    addLog(`${sourceName} deals ${damage} damage to ${permanent.name} (${marked}/${toughness}) — indestructible.`);
+  } else {
+    addLog(`${sourceName} deals ${damage} damage to ${permanent.name} (${marked}/${toughness} marked).`);
+  }
   return false;
 };
 
@@ -132,7 +142,9 @@ export const applyDamage = (
     const killed: any[] = [];
     for (const creature of creatures) {
       const toughness = calculateToughness(creature);
-      const isLethal = damage >= toughness || (damage > 0 && hasDeathtouch);
+      const hasIndestructible = (creature as any).keywords?.includes('indestructible');
+      const wouldBeLethal = damage >= toughness || (damage > 0 && hasDeathtouch);
+      const isLethal = wouldBeLethal && !hasIndestructible;
       totalDamageDealt += damage;
 
       if (isLethal) {

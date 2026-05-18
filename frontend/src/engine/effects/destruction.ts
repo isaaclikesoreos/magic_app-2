@@ -63,8 +63,10 @@ export const applyDestroy = (
       removeAttachedAuras(newState, perm.instance_id);
       pushToGraveyardOrExile(newState, opponent, perm);
       destroyed.push(perm.name);
-      newState._dyingCreatures = newState._dyingCreatures || [];
-      newState._dyingCreatures.push({ creature: perm, owner: 'opponent' });
+      if ((perm.type_line || '').toLowerCase().includes('creature')) {
+        newState._dyingCreatures = newState._dyingCreatures || [];
+        newState._dyingCreatures.push({ creature: perm, owner: 'opponent' });
+      }
       newState._leavingPermanents = newState._leavingPermanents || [];
       newState._leavingPermanents.push({ permanent: perm, owner: 'opponent' });
     }
@@ -120,10 +122,13 @@ export const applyDestroy = (
   newState._leavingPermanents = newState._leavingPermanents || [];
   newState._leavingPermanents.push({ permanent, owner: targetOwner });
 
-  // Track dying permanent for death triggers (creatures, artifacts, enchantments, etc.)
-  // This feeds detectDeathTriggers which checks for both creature-specific and permanent_dies triggers
-  newState._dyingCreatures = newState._dyingCreatures || [];
-  newState._dyingCreatures.push({ creature: permanent, owner: targetOwner });
+  // Track dying creature for creature_died triggers. Only creatures "die" per
+  // MTG (rule 700.4); artifact/enchantment self-death triggers route via
+  // _leavingPermanents → detectPermanentLeavesTriggers.
+  if ((permanent.type_line || '').toLowerCase().includes('creature')) {
+    newState._dyingCreatures = newState._dyingCreatures || [];
+    newState._dyingCreatures.push({ creature: permanent, owner: targetOwner });
+  }
 
   // Track destroyed land
   const isLand = (permanent.type_line || '').toLowerCase().includes('land');
@@ -252,11 +257,14 @@ export const applyDestroyAll = (
   processPlayer(newState.players.you, 'you');
   processPlayer(newState.players.opponent, 'opponent');
 
-  // Track for death + leaves triggers
+  // Track for death + leaves triggers. _dyingCreatures only for creatures
+  // (per MTG rule 700.4 — non-creature destroys go through _leavingPermanents).
   const dyingArr = newState._dyingCreatures = newState._dyingCreatures || [];
   const leavingArr = newState._leavingPermanents = newState._leavingPermanents || [];
   destroyed.forEach(({ permanent, owner }) => {
-    dyingArr.push({ creature: permanent, owner });
+    if ((permanent.type_line || '').toLowerCase().includes('creature')) {
+      dyingArr.push({ creature: permanent, owner });
+    }
     leavingArr.push({ permanent, owner });
   });
 

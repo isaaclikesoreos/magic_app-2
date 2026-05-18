@@ -286,6 +286,18 @@ interface TutorSelectionState {
   destination: string;
   stackItemId?: string;
   isSpellEffect?: boolean;
+  // 'library' (default) — normal tutoring.
+  // 'sideboard' — Karn-style wish from outside the game.
+  source?: 'library' | 'sideboard';
+}
+
+// Multi-select library search with player-chosen ordering (Goblin Recruiter).
+// Selection order = draw order: position 0 of `selected` ends up at the top of
+// the library (drawn first) when the player confirms.
+interface MultiTutorSelectionState {
+  candidates: Card[];
+  reason: string;
+  stackItemId: string;
 }
 
 interface SelectedCard extends Card {
@@ -342,6 +354,7 @@ interface PuzzleContextValue {
   triggerTargetingState: TriggerTargetingState | null;
   modalSpellState: ModalSpellState | null;
   tutorSelectionState: TutorSelectionState | null;
+  multiTutorSelectionState: MultiTutorSelectionState | null;
   scrySelectionState: ScrySelectionState | null;
   additionalCostDiscardState: AdditionalCostDiscardState | null;
 
@@ -354,6 +367,8 @@ interface PuzzleContextValue {
   advancePhase: () => void;
   getCurrentPhase: () => PhaseInfo;
   canCastSorcerySpeed: () => boolean;
+  canCastFromLibraryTop: (card: Card) => boolean;
+  canRevealLibraryTop: () => boolean;
   toggleAttacker: (instanceId: string) => void;
   attackerTargets: Record<string, string>;
   setAttackerTarget: (attackerId: string, targetPwInstanceId: string | null) => void;
@@ -453,7 +468,7 @@ interface PuzzleContextValue {
   cancelStormTargeting: () => void;
   useChannel: () => void;
   deactivateChannel: () => void;
-  addCardToZone: (card: Card, player: PlayerKey, zone: 'hand' | 'battlefield' | 'graveyard' | 'library') => void;
+  addCardToZone: (card: Card, player: PlayerKey, zone: 'hand' | 'battlefield' | 'graveyard' | 'library' | 'sideboard') => void;
   addMana: (color: string, amount: number) => void;
   selectStackSpellTarget: (stackItemId: string) => void;
   assignCopyNewTarget: (targetType: string, targetData: any) => void;
@@ -479,6 +494,8 @@ interface PuzzleContextValue {
   completeModalSpellTarget: (targetType: string, targetData: any) => void;
   cancelModalSpell: () => void;
   completeTutorSelection: (card: Card) => void;
+  completeMultiTutorSelection: (orderedCards: Card[]) => void;
+  cancelMultiTutorSelection: () => void;
   completeScrySelection: (bottomIndices: number[], topOrder: number[]) => void;
   completeAdditionalCostDiscard: (card: Card) => void;
   cancelAdditionalCostDiscard: () => void;
@@ -588,6 +605,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
   const altCastSnapshot = useRef<{ hand: Card[]; manaPool: any; cardName: string; fullState?: GameState } | null>(null);
   const [modalSpellState, setModalSpellState] = useState<ModalSpellState | null>(null);
   const [tutorSelectionState, setTutorSelectionState] = useState<TutorSelectionState | null>(null);
+  const [multiTutorSelectionState, setMultiTutorSelectionState] = useState<MultiTutorSelectionState | null>(null);
   const [scrySelectionState, setScrySelectionState] = useState<ScrySelectionState | null>(null);
   const [additionalCostDiscardState, setAdditionalCostDiscardState] = useState<AdditionalCostDiscardState | null>(null);
   const [collectEvidenceState, setCollectEvidenceState] = useState<CollectEvidenceState | null>(null);
@@ -742,6 +760,44 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     return phase.canCastSorceries && stack.length === 0;
   }, [getCurrentPhase, stack]);
 
+  // True if any of your battlefield permanents has a `look_at_top_of_library`
+  // static ability — Vizier of the Menagerie, Oracle of Mul Daya, Future Sight,
+  // Conspicuous Snoop, etc. UI uses this to render the top library card
+  // face-up.
+  const canRevealLibraryTop = useCallback((): boolean => {
+    if (!gameState) return false;
+    const bf = gameState.players.you.battlefield || [];
+    return bf.some((p: any) =>
+      (p.static_abilities || []).some((sa: any) => sa?.effect?.type === 'look_at_top_of_library')
+    );
+  }, [gameState]);
+
+  // True iff `card` is the actual top of your library AND some permanent you
+  // control has a `cast_from_top_of_library` static whose filter.types matches.
+  // Powers Vizier's "you may cast creature spells from the top of your
+  // library" and similar (Future Sight, Conspicuous Snoop for Goblins).
+  const canCastFromLibraryTop = useCallback((card: Card): boolean => {
+    if (!gameState) return false;
+    const library = gameState.players.you.library || [];
+    if (library.length === 0) return false;
+    const top = library[0];
+    const cardId = (card as any).instance_id || card.card_id;
+    const topId = (top as any).instance_id || top.card_id;
+    if (cardId !== topId) return false;
+    const bf = gameState.players.you.battlefield || [];
+    const tl = (card.type_line || '').toLowerCase();
+    for (const p of bf) {
+      const statics = (p as any).static_abilities || [];
+      for (const sa of statics) {
+        if (sa?.effect?.type !== 'cast_from_top_of_library') continue;
+        const types: string[] = sa?.effect?.filter?.types || [];
+        if (types.length === 0) return true;
+        if (types.some(t => tl.includes(String(t).toLowerCase()))) return true;
+      }
+    }
+    return false;
+  }, [gameState]);
+
   // Helper: Calculate max land drops per turn (base 1 + Exploration-like effects)
   // Returns Infinity when Fastbond is on the battlefield.
   const getMaxLandDrops = useCallback((): number => {
@@ -782,7 +838,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
   }, [calculateBattlefieldPower]);
 
   // God mode actions
-  const addCardToZone = useCallback((card: Card, player: PlayerKey, zone: 'hand' | 'battlefield' | 'graveyard' | 'library') => {
+  const addCardToZone = useCallback((card: Card, player: PlayerKey, zone: 'hand' | 'battlefield' | 'graveyard' | 'library' | 'sideboard') => {
     setGameState(prev => {
       if (!prev) return prev;
       const newState = JSON.parse(JSON.stringify(prev)) as GameState;
@@ -802,6 +858,9 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
         targetPlayer.library = targetPlayer.library || [];
         targetPlayer.library.unshift(ownedCard);
         targetPlayer.library_count = targetPlayer.library.length;
+      } else if (zone === 'sideboard') {
+        targetPlayer.sideboard = targetPlayer.sideboard || [];
+        targetPlayer.sideboard.push(ownedCard);
       }
       return newState;
     });
@@ -877,6 +936,13 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
               delete (cleared as any).protection;
               delete (cleared as any).protection_until_end_of_turn;
             }
+            // Clear temporary keyword grants (Adanto Vanguard indestructible-EOT, etc.).
+            // Only strip keywords that were granted by an effect; native keywords stay.
+            const granted = (p as any)._grantedKeywordsEOT as string[] | undefined;
+            if (granted && granted.length > 0) {
+              cleared.keywords = (cleared.keywords || []).filter(k => !granted.includes(k));
+              delete (cleared as any)._grantedKeywordsEOT;
+            }
             return cleared;
           });
 
@@ -889,6 +955,29 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
 
         // Increment turn counter
         newState.turnNumber = (newState.turnNumber || 1) + 1;
+
+        // Revert Karn-style artifact animations whose duration has expired.
+        // Each entry was tagged with expiresAtTurn = (turn when activated) + 1.
+        if (newState._animatedArtifacts && newState._animatedArtifacts.length > 0) {
+          const currentTurn = newState.turnNumber;
+          const survivors: typeof newState._animatedArtifacts = [];
+          for (const entry of newState._animatedArtifacts) {
+            if (entry.expiresAtTurn <= currentTurn) {
+              const target = newState.players[entry.owner].battlefield?.find(
+                (p: any) => p.instance_id === entry.instance_id
+              );
+              if (target) {
+                target.type_line = entry.originalTypeLine;
+                target.power = entry.originalPower as any;
+                target.toughness = entry.originalToughness as any;
+                addLog(`${target.name} reverts to its original form.`);
+              }
+            } else {
+              survivors.push(entry);
+            }
+          }
+          newState._animatedArtifacts = survivors.length > 0 ? survivors : undefined;
+        }
 
         // Expire impulse-drawn cards whose playability has ended.
         // Plotted cards bypass this — they're castable for the rest of the game
@@ -1480,10 +1569,13 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
             hand: prev.players.you.hand.filter(c => c.instance_id !== card.instance_id),
             graveyard: (prev.players.you.graveyard || []).filter(c => c.instance_id !== card.instance_id),
             exile: (prev.players.you.exile || []).filter(c => c.instance_id !== card.instance_id),
+            library: (prev.players.you.library || []).filter(c => c.instance_id !== card.instance_id),
             mana_pool: newManaPool
           }
         }
       };
+      // Keep library_count in sync if we just removed the top card (Vizier-style).
+      newState.players.you.library_count = newState.players.you.library?.length ?? 0;
       // Remove from impulse tracking if cast from exile
       if (newState.impulsedCards) {
         newState.impulsedCards = newState.impulsedCards.filter(ic => ic.card.instance_id !== card.instance_id);
@@ -2395,6 +2487,18 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
         // Only allow targeting creatures you control
         return targetType === 'creature' && targetData.owner === 'you';
       }
+      // Nonlegendary creatures you control (Kiki-Jiki copy target).
+      if (ability.target_restriction === 'your_creatures_nonlegendary') {
+        if (targetType !== 'creature' || targetData.owner !== 'you') return false;
+        return !((targetData.type_line || '').toLowerCase().includes('legendary'));
+      }
+      // Noncreature artifact (Karn, the Great Creator's +1).
+      // Any owner — Karn can animate opponent's artifacts too.
+      if (ability.target_restriction === 'noncreature_artifact') {
+        if (targetType !== 'artifact') return false;
+        const tl = (targetData.type_line || '').toLowerCase();
+        return tl.includes('artifact') && !tl.includes('creature');
+      }
 
       // For damage effects that say "any target", allow creature or player
       if ((effect.type === 'damage' || effect.type === 'damage_and_self_damage') && effect.target === 'creature_or_player') {
@@ -2579,10 +2683,12 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     setGameState(prev => {
       if (!prev) return prev;
       const newState = JSON.parse(JSON.stringify(prev)) as GameState;
-      // Remove card from hand/graveyard/exile and spend mana
+      // Remove card from hand/graveyard/exile/library and spend mana
       newState.players.you.hand = newState.players.you.hand.filter((c: any) => c.instance_id !== card.instance_id);
       newState.players.you.graveyard = (newState.players.you.graveyard || []).filter((c: any) => c.instance_id !== card.instance_id);
       newState.players.you.exile = (newState.players.you.exile || []).filter((c: any) => c.instance_id !== card.instance_id);
+      newState.players.you.library = (newState.players.you.library || []).filter((c: any) => c.instance_id !== card.instance_id);
+      newState.players.you.library_count = newState.players.you.library?.length ?? 0;
       newState.players.you.mana_pool = newManaPool;
       // Remove from impulse tracking if cast from exile
       if (newState.impulsedCards) {
@@ -3086,6 +3192,61 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       if (!holdingPriority && stack.length > 1) {
         setTimeout(() => resolveStack(), 100);
       }
+      return;
+    }
+
+    // Handle cast_from_graveyard_free (Goblin Dark-Dwellers ETB).
+    // Phase 1: pause for graveyard spell targeting (CMC filter from effect.max_cmc).
+    if (topItem.effect?.type === 'cast_from_graveyard_free' && !topItem.targeting_data) {
+      if (triggerTargetLock.current) return;
+      triggerTargetLock.current = true;
+
+      const maxCMC = (topItem.effect as any).max_cmc as number | undefined;
+      const gySpells = (gameState.players.you.graveyard || []).filter((c: any) => {
+        const tl = (c.type_line || '').toLowerCase();
+        if (!(tl.includes('instant') || tl.includes('sorcery'))) return false;
+        if (maxCMC !== undefined && calculateCMC(c.mana_cost) > maxCMC) return false;
+        return true;
+      });
+      if (gySpells.length === 0) {
+        addLog(`${topItem.source.name}: no valid instant or sorcery in graveyard${maxCMC !== undefined ? ` (CMC ≤ ${maxCMC})` : ''}.`);
+        setStack(prev => prev.slice(0, -1));
+        triggerTargetLock.current = false;
+        if (!holdingPriority && stack.length > 1) {
+          setTimeout(() => resolveStack(), 100);
+        }
+        return;
+      }
+      setTriggerTargetingState({ stackItem: topItem, validTargetType: 'graveyard_spell', maxCMC });
+      setIsTargeting(true);
+      const cmcNote = maxCMC !== undefined ? ` (CMC ≤ ${maxCMC})` : '';
+      addLog(`${topItem.source.name}: select an instant or sorcery in your graveyard${cmcNote} to cast for free`);
+      return;
+    }
+
+    // Phase 2: target picked — route the chosen spell through the cast pipeline
+    // for free. _flashbackCast moves it to exile after resolution; _altCostPaid
+    // skips the mana spend; on-cast triggers fire via the normal cast path.
+    if (topItem.effect?.type === 'cast_from_graveyard_free' && topItem.targeting_data) {
+      triggerTargetLock.current = false;
+      const targetCard = topItem.targeting_data.targetData;
+      // Pop the trigger first so the cast pipeline operates on a clean stack
+      setStack(prev => prev.slice(0, -1));
+      if (!targetCard) {
+        if (!holdingPriority && stack.length > 1) setTimeout(() => resolveStack(), 100);
+        return;
+      }
+      const flashbackCard = {
+        ...targetCard,
+        _flashbackCast: true,
+        _altCostPaid: true,
+        mana_cost: '{0}',
+      } as Card;
+      addLog(`${topItem.source.name}: casting ${targetCard.name} from graveyard without paying its mana cost.`);
+      // Delegate to the standard cast pipeline. Fake a rect since the targeting
+      // arrow origin is computed from it; offscreen is fine for engine flow.
+      const fakeRect = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 } as DOMRect;
+      setTimeout(() => selectCardFromHand(flashbackCard, fakeRect), 0);
       return;
     }
 
@@ -3929,6 +4090,132 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       return;
     }
 
+    // Goblin Recruiter — search library for any number of matching cards, put
+    // on top in chosen order. Phase 1: filter library + open multi-select modal.
+    if (topItem.effect?.type === 'library_multi_tutor_top' && !topItem.targeting_data) {
+      if (triggerTargetLock.current) return;
+      triggerTargetLock.current = true;
+
+      const owner = ((topItem.source as any).owner || 'you') as PlayerKey;
+      const library = gameState.players[owner].library || [];
+      const filter = (topItem.effect as any).filter || {};
+      const types: string[] = filter.types || [];
+      const candidates = library.filter((c: any) => {
+        if ((c as any).isToken) return false;
+        const tl = (c.type_line || '').toLowerCase();
+        if (types.length === 0) return true;
+        return types.some(t => tl.includes(String(t).toLowerCase()));
+      });
+
+      // "Any number" includes zero — still allow the prompt so the player can
+      // intentionally pick none. Skip the modal only if no candidates exist.
+      if (candidates.length === 0) {
+        addLog(`${topItem.source.name}: no matching cards in library.`);
+        setStack(prev => prev.slice(0, -1));
+        triggerTargetLock.current = false;
+        if (!holdingPriority && stack.length > 1) setTimeout(() => resolveStack(), 100);
+        return;
+      }
+
+      setMultiTutorSelectionState({
+        candidates,
+        reason: topItem.source.name,
+        stackItemId: topItem.id,
+      });
+      addLog(`${topItem.source.name}: choose any number of matching cards to put on top of your library (selection order = draw order).`);
+      return;
+    }
+
+    // Phase 2: ordered selection populated, apply the move + log.
+    if (topItem.effect?.type === 'library_multi_tutor_top' && topItem.targeting_data) {
+      triggerTargetLock.current = false;
+      const orderedCards = (topItem.targeting_data.targetData as any)?.orderedCards as Card[] | undefined;
+      const owner = ((topItem.source as any).owner || 'you') as PlayerKey;
+
+      setGameState(prev => {
+        if (!prev) return prev;
+        const newState = JSON.parse(JSON.stringify(prev)) as GameState;
+        const player = newState.players[owner];
+        const lib = player.library || [];
+        if (!orderedCards || orderedCards.length === 0) {
+          addLog(`${topItem.source.name}: shuffled — no cards selected.`);
+          player.library_count = lib.length;
+          return newState;
+        }
+        // Splice each selected card out by instance_id (or card_id fallback).
+        const toPlace: any[] = [];
+        for (const sel of orderedCards) {
+          const matchId = (sel as any).instance_id || sel.card_id;
+          const idx = lib.findIndex(c =>
+            ((c as any).instance_id || c.card_id) === matchId
+          );
+          if (idx >= 0) toPlace.push(lib.splice(idx, 1)[0]);
+        }
+        // Prepend in reverse so position 0 of orderedCards ends up at lib[0].
+        for (let i = toPlace.length - 1; i >= 0; i--) lib.unshift(toPlace[i]);
+        player.library = lib;
+        player.library_count = lib.length;
+        const names = toPlace.map((c: any) => c.name).join(', ');
+        addLog(`${topItem.source.name}: revealed ${names}. Library shuffled, those cards on top in chosen order.`);
+        return newState;
+      });
+
+      setStack(prev => prev.slice(0, -1));
+      if (!holdingPriority && stack.length > 1) setTimeout(() => resolveStack(), 100);
+      return;
+    }
+
+    // Karn-style wish — pick a card from your sideboard, put into hand.
+    // Reuses the TutorSelector UI with source: 'sideboard'.
+    if (topItem.effect?.type === 'wish_from_sideboard' && !topItem.targeting_data) {
+      if (triggerTargetLock.current) return;
+      triggerTargetLock.current = true;
+
+      const owner = ((topItem.source as any).owner || 'you') as PlayerKey;
+      const sideboard = gameState.players[owner].sideboard || [];
+      if (sideboard.length === 0) {
+        addLog(`${topItem.source.name}: sideboard is empty — wish fizzles.`);
+        setStack(prev => prev.slice(0, -1));
+        triggerTargetLock.current = false;
+        if (!holdingPriority && stack.length > 1) setTimeout(() => resolveStack(), 100);
+        return;
+      }
+      setTutorSelectionState({
+        cards: sideboard,
+        allCards: sideboard,
+        reason: topItem.source.name,
+        destination: 'hand',
+        stackItemId: topItem.id,
+        source: 'sideboard',
+      });
+      return;
+    }
+
+    if (topItem.effect?.type === 'wish_from_sideboard' && topItem.targeting_data) {
+      triggerTargetLock.current = false;
+      const chosen = topItem.targeting_data.targetData as any;
+      const owner = ((topItem.source as any).owner || 'you') as PlayerKey;
+      setGameState(prev => {
+        if (!prev) return prev;
+        const newState = JSON.parse(JSON.stringify(prev)) as GameState;
+        const player = newState.players[owner];
+        const sb = player.sideboard || [];
+        const matchId = (chosen as any).instance_id || chosen.card_id;
+        const idx = sb.findIndex((c: any) => ((c as any).instance_id || c.card_id) === matchId);
+        if (idx >= 0) {
+          const [card] = sb.splice(idx, 1);
+          player.hand = player.hand || [];
+          player.hand.push(card);
+          addLog(`${topItem.source.name}: revealed ${card.name} from outside the game and put it into your hand.`);
+        }
+        player.sideboard = sb;
+        return newState;
+      });
+      setStack(prev => prev.slice(0, -1));
+      if (!holdingPriority && stack.length > 1) setTimeout(() => resolveStack(), 100);
+      return;
+    }
+
     // Handle scry/surveil — look at top cards, choose placement
     if ((topItem.effect?.type === 'scry' || topItem.effect?.type === 'surveil') && !topItem.targeting_data) {
       const isSurveil = topItem.effect.type === 'surveil';
@@ -4335,6 +4622,28 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       allTriggers.push(...tokenTriggers);
     }
 
+    // Token copies (Kiki-Jiki etc.) carry their source's triggered_abilities,
+    // so each created token needs creature_entered dispatched so its own ETBs
+    // fire (Dark-Dwellers cast-from-gy, Snapcaster grant_flashback, etc.) AND
+    // so other permanents' "whenever a creature enters" triggers see them.
+    if (topItem.effect?.type === 'create_token_copy' && (newState as any)._tokensCreated) {
+      const created = (newState as any)._tokensCreated as Array<{ token: any; owner: PlayerKey }>;
+      for (const { token } of created) {
+        const etbTriggers = checkTriggersForEvent('creature_entered', {
+          creature: token,
+          wasEvoked: false,
+        }, newState);
+        etbTriggers.forEach(trigger => {
+          if (trigger.effect?.type === 'modal_choice') {
+            setModalTriggerChoice({ trigger, modes: trigger.effect.modes || [] });
+          } else {
+            allTriggers.push(trigger);
+          }
+        });
+      }
+      delete (newState as any)._tokensCreated;
+    }
+
     // Check for card draw triggers
     if (topItem.effect?.type === 'draw_cards' || topItem.effect?.type === 'each_player_draws') {
       const youDrawn = newState._youCardsDrawn || 0;
@@ -4666,13 +4975,16 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
 
   // Auto-resolve effect: Continue resolving when in auto-resolve mode
   useEffect(() => {
-    if (!holdingPriority && stack.length > 0 && !isTargeting && !xCostState && !multiTargetingState && !stormTargetingState && !copyTargetingState && !ballistaState && !modalTriggerChoice && !sacrificeMode && !manaColorSelection && !abilityMenuState && !optionalTriggerPromptState && !lookTakeState && !discardSelectionState && !payToUntapState && !counterUnlessPayState && !extortState && !triggerOrderingState && !endurePromptState && !legendRuleState && !targetedDiscardState && !triggerTargetingState && !modalSpellState && !tutorSelectionState && !scrySelectionState && !additionalCostDiscardState && !suspendCastPending) {
+    if (!holdingPriority && stack.length > 0 && !isTargeting && !xCostState && !multiTargetingState && !stormTargetingState && !copyTargetingState && !ballistaState && !modalTriggerChoice && !sacrificeMode && !manaColorSelection && !abilityMenuState && !optionalTriggerPromptState && !lookTakeState && !discardSelectionState && !payToUntapState && !counterUnlessPayState && !extortState && !triggerOrderingState && !endurePromptState && !legendRuleState && !targetedDiscardState && !triggerTargetingState && !modalSpellState && !tutorSelectionState && !multiTutorSelectionState && !scrySelectionState && !additionalCostDiscardState && !suspendCastPending) {
       // Check if the top item requires input
       const topItem = stack[stack.length - 1];
       // Effects that handle their own targeting pause inside resolveStack (e.g., grant_flashback, tutor)
       // should auto-resolve even if requires_input is true — resolveStack will set up targeting mode.
       const selfHandledInput = (topItem.effect?.type === 'grant_flashback' && !topItem.targeting_data)
+        || (topItem.effect?.type === 'cast_from_graveyard_free' && !topItem.targeting_data)
         || (topItem.effect?.type === 'tutor' && !topItem.targeting_data)
+        || (topItem.effect?.type === 'library_multi_tutor_top' && !topItem.targeting_data)
+        || (topItem.effect?.type === 'wish_from_sideboard' && !topItem.targeting_data)
         || (topItem.effect?.type === 'return_from_graveyard_to_hand' && !topItem.targeting_data)
         || (topItem.effect?.type === 'exile_until_end_step' && !topItem.targeting_data)
         || (topItem.effect?.type === 'exile_until_leaves' && !topItem.targeting_data)
@@ -7514,7 +7826,13 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     }
 
     const allBF = [...gameState.players.you.battlefield, ...gameState.players.opponent.battlefield];
-    const effectiveAbilities = getEffectiveActivatedAbilities(permanent, allBF);
+    // Identify the permanent's controller so we look at the correct library top
+    // for Snoop-style "abilities of top card" grants.
+    const controllerKey: PlayerKey = (gameState.players.you.battlefield || []).some(p => p.instance_id === permanent.instance_id)
+      ? 'you'
+      : 'opponent';
+    const topLib = gameState.players[controllerKey].library?.[0] || null;
+    const effectiveAbilities = getEffectiveActivatedAbilities(permanent, allBF, topLib);
     const ability = effectiveAbilities[abilityIndex];
     if (!ability) return;
 
@@ -7541,6 +7859,20 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     if (cost && typeof cost !== 'string' && cost.tap && !canActivateTapAbility(permanent, allBF)) {
       addLog(`${permanent.name} has summoning sickness — can't tap for abilities this turn`);
       return;
+    }
+
+    // 1d. Life cost (Adanto Vanguard's "Pay 4 life"). You can't pay life you
+    // don't have — must end ≥ 1 (you'd lose at 0).
+    const lifeCost = (cost && typeof cost !== 'string') ? (cost as any).life as number | undefined : undefined;
+    if (lifeCost !== undefined && lifeCost > 0) {
+      const controllerKey: PlayerKey = (gameState.players.you.battlefield || []).some(p => p.instance_id === permanent.instance_id)
+        ? 'you'
+        : 'opponent';
+      const currentLife = gameState.players[controllerKey].life;
+      if (currentLife - lifeCost < 1) {
+        addLog(`${permanent.name}: cannot pay ${lifeCost} life (have ${currentLife}).`);
+        return;
+      }
     }
 
     // 1c. Planeswalker loyalty cost & once-per-turn gate (MTG 606.5).
@@ -7975,6 +8307,25 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       });
     }
 
+    // Pay life cost (Adanto Vanguard "Pay 4 life: ...").
+    if (lifeCost !== undefined && lifeCost > 0) {
+      setGameState(prev => {
+        if (!prev) return prev;
+        const controllerKey: PlayerKey = (prev.players.you.battlefield || []).some(p => p.instance_id === permanent.instance_id)
+          ? 'you'
+          : 'opponent';
+        const player = prev.players[controllerKey];
+        return {
+          ...prev,
+          players: {
+            ...prev.players,
+            [controllerKey]: { ...player, life: player.life - lifeCost }
+          }
+        };
+      });
+      addLog(`${permanent.name}: paid ${lifeCost} life.`);
+    }
+
     // Pay loyalty cost (planeswalkers): adjust loyalty, mark activated this turn,
     // and run 0-loyalty SBA. Routed through addLoyalty helper so future
     // proliferate / counter manipulation has a single point to special-case PWs.
@@ -8077,7 +8428,11 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     const allBF = gameState
       ? [...gameState.players.you.battlefield, ...gameState.players.opponent.battlefield]
       : [];
-    const abilities = getEffectiveActivatedAbilities(permanent, allBF);
+    const controllerKey: PlayerKey = gameState && (gameState.players.you.battlefield || []).some(p => p.instance_id === permanent.instance_id)
+      ? 'you'
+      : 'opponent';
+    const topLib = (gameState?.players[controllerKey].library?.[0]) || null;
+    const abilities = getEffectiveActivatedAbilities(permanent, allBF, topLib);
     if (abilities.length <= 1) {
       activateAbility(permanent, 0);
       return;
@@ -8430,6 +8785,31 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     setTutorSelectionState(null);
     // Auto-resolve useEffect will pick up the updated stack
   }, [tutorSelectionState]);
+
+  const completeMultiTutorSelection = useCallback((orderedCards: Card[]) => {
+    if (!multiTutorSelectionState) return;
+    const id = multiTutorSelectionState.stackItemId;
+    setStack(prev => prev.map(item =>
+      item.id === id
+        ? {
+            ...item,
+            targeting_data: {
+              targetType: 'library_cards' as any,
+              targetData: { orderedCards },
+            },
+            requires_input: false,
+          }
+        : item
+    ));
+    setMultiTutorSelectionState(null);
+  }, [multiTutorSelectionState]);
+
+  const cancelMultiTutorSelection = useCallback(() => {
+    if (!multiTutorSelectionState) return;
+    // Treat cancel as "pick none" — selecting zero is a valid choice for the
+    // "any number" wording on Goblin Recruiter.
+    completeMultiTutorSelection([]);
+  }, [multiTutorSelectionState, completeMultiTutorSelection]);
 
   const completeScrySelection = useCallback((bottomIndices: number[], topOrder: number[]) => {
     if (!scrySelectionState || !gameState) return;
@@ -8852,30 +9232,64 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     setEndurePromptState(null);
   }, [endurePromptState, addLog]);
 
-  // Legend rule: player picks which legendary copy to keep
+  // Legend rule: player picks which legendary copy to keep. Sacrificed copies
+  // must trigger death and sacrifice effects (Blood Artist, Cruel Celebrant,
+  // Mayhem Devil, etc.), so we route them through the same trigger surfaces
+  // that applySacrificeSelf does.
   const resolveLegendRule = useCallback((chosenToKeep: Permanent) => {
     if (!gameState || !legendRuleState) return;
+    const toSacrifice = legendRuleState.duplicates.filter(
+      d => d.instance_id !== chosenToKeep.instance_id
+    );
+    if (toSacrifice.length === 0) {
+      setLegendRuleState(null);
+      if (!holdingPriority && stack.length > 0) setTimeout(() => resolveStack(), 100);
+      return;
+    }
+
+    // Build a post-sac snapshot for trigger detection (triggers look at the
+    // current battlefield to decide what fires).
+    const snapshot = JSON.parse(JSON.stringify(gameState)) as GameState;
+    snapshot.players.you.battlefield = (snapshot.players.you.battlefield || []).filter(
+      (c: any) => !toSacrifice.some(s => s.instance_id === c.instance_id)
+    );
+
     setGameState(prev => {
       if (!prev) return prev;
       const newState = JSON.parse(JSON.stringify(prev)) as GameState;
-      const toSacrifice = legendRuleState.duplicates.filter(
-        d => d.instance_id !== chosenToKeep.instance_id
-      );
       for (const perm of toSacrifice) {
         newState.players.you.battlefield = newState.players.you.battlefield.filter(
           (c: any) => c.instance_id !== perm.instance_id
         );
+        removeAttachedAuras(newState, perm.instance_id || '');
         pushToGraveyardOrExile(newState, newState.players.you, perm);
       }
       return newState;
     });
-    addLog(`Legend rule: kept ${chosenToKeep.name}, sacrificed duplicate.`);
+
+    // Dispatch death + sacrifice + leave triggers directly. We do NOT populate
+    // newState._dyingCreatures / _sacrificedPermanents / _leavingPermanents
+    // here — resolveStack's post-effect block consumes those arrays and would
+    // double-fire if both paths emitted triggers. Legend rule fires outside an
+    // effect-handler resolution, so direct dispatch is the right hand-off.
+    for (const perm of toSacrifice) {
+      if ((perm.type_line || '').toLowerCase().includes('creature')) {
+        const deathTriggers = checkTriggersForEvent('creature_died', { creature: perm, owner: 'you' as PlayerKey }, snapshot);
+        deathTriggers.forEach(t => addToStack(t));
+      }
+      const sacTriggers = checkTriggersForEvent('permanent_sacrificed', { permanent: perm, owner: 'you' as PlayerKey }, snapshot);
+      sacTriggers.forEach(t => addToStack(t));
+      const leftTriggers = checkTriggersForEvent('permanent_left', { permanent: perm, owner: 'you' as PlayerKey }, snapshot);
+      leftTriggers.forEach(t => addToStack(t));
+    }
+
+    const names = toSacrifice.map(p => p.name).join(', ');
+    addLog(`Legend rule: kept ${chosenToKeep.name}, sacrificed ${names}.`);
     setLegendRuleState(null);
-    // Resume stack resolution
     if (!holdingPriority && stack.length > 0) {
       setTimeout(() => resolveStack(), 100);
     }
-  }, [gameState, legendRuleState, addLog, holdingPriority, stack, resolveStack]);
+  }, [gameState, legendRuleState, addLog, holdingPriority, stack, resolveStack, addToStack]);
 
   // Complete activated ability after target is selected.
   // All costs (mana, tap, sacrifice) are deferred until this point so cancel is free.
@@ -9703,6 +10117,8 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     advancePhase,
     getCurrentPhase,
     canCastSorcerySpeed,
+    canCastFromLibraryTop,
+    canRevealLibraryTop,
     toggleAttacker,
     attackerTargets,
     setAttackerTarget,
@@ -9850,6 +10266,9 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     cancelModalSpell,
     tutorSelectionState,
     completeTutorSelection,
+    multiTutorSelectionState,
+    completeMultiTutorSelection,
+    cancelMultiTutorSelection,
     scrySelectionState,
     completeScrySelection,
     additionalCostDiscardState,

@@ -130,3 +130,55 @@ export const applyProwessTrigger = (
 
   return newState;
 };
+
+/**
+ * Grant a keyword (e.g. 'indestructible', 'haste', 'trample') to a permanent
+ * until end of turn. Used by Adanto Vanguard's "Pay 4 life: gain indestructible
+ * until end of turn." and similar effects.
+ *
+ * Pushes the keyword onto the target's `keywords` array AND records it in
+ * `_grantedKeywordsEOT` so the end-of-turn cleanup can remove only the grant
+ * (preserving native keywords). Native checks elsewhere (damage, destroy,
+ * combat) read from `keywords`, so they pick up the grant automatically.
+ *
+ * Target: defaults to source ('self'). Set effect.target to 'creature_target'
+ * to grant to a chosen creature via targeting_data (not used by Adanto, but
+ * generalizes for future cards).
+ */
+export const applyGrantKeywordUntilEOT = (
+  stackItem: StackItem,
+  gameState: GameState,
+  { addLog }: EffectHelpers
+): GameState => {
+  const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
+  const keyword = ((stackItem.effect as any).keyword as string | undefined)?.toLowerCase();
+  if (!keyword) return newState;
+
+  const targetMode = (stackItem.effect as any).target || 'self';
+  let target: Permanent | undefined;
+  if (targetMode === 'self') {
+    const sourceId = (stackItem.source as any)?.instance_id;
+    const owner = ((stackItem.source as any)?.owner || 'you') as PlayerKey;
+    target = newState.players[owner].battlefield?.find((p: Permanent) => p.instance_id === sourceId);
+  } else {
+    const td = stackItem.targeting_data?.targetData;
+    const ownerKey = (td?.owner || 'you') as PlayerKey;
+    const matchId = (td as any)?.instance_id;
+    if (matchId) {
+      target = newState.players[ownerKey].battlefield?.find((p: Permanent) => p.instance_id === matchId);
+    }
+  }
+
+  if (!target) {
+    addLog(`${stackItem.source?.name}: could not grant ${keyword} (no valid target).`);
+    return newState;
+  }
+
+  const tAny = target as any;
+  tAny.keywords = tAny.keywords || [];
+  if (!tAny.keywords.includes(keyword)) tAny.keywords.push(keyword);
+  tAny._grantedKeywordsEOT = tAny._grantedKeywordsEOT || [];
+  tAny._grantedKeywordsEOT.push(keyword);
+  addLog(`${target.name} gains ${keyword} until end of turn.`);
+  return newState;
+};

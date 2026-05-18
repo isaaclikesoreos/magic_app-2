@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyBuffCreature, applyBuffSelf, applyProwessTrigger } from '../buff';
+import { applyBuffCreature, applyBuffSelf, applyProwessTrigger, applyGrantKeywordUntilEOT } from '../buff';
 import { makeGameState, createCreature, createStackItem, mockHelpers } from '../../__tests__/fixtures';
 
 describe('applyBuffCreature', () => {
@@ -114,5 +114,49 @@ describe('applyProwessTrigger', () => {
     const result = applyProwessTrigger(item, state, helpers);
 
     expect(result.players.you.battlefield[0].prowessBonus).toBe(2);
+  });
+});
+
+describe('applyGrantKeywordUntilEOT', () => {
+  it('adds the keyword to source and tracks the grant', () => {
+    const adanto = createCreature({
+      card_id: 'adanto-1', instance_id: 'adanto-1', name: 'Adanto Vanguard', owner: 'you',
+      keywords: [],
+    });
+    const state = makeGameState({ battlefield: [adanto] });
+    const item = createStackItem({
+      source: { card_id: 'adanto-1', instance_id: 'adanto-1', name: 'Adanto Vanguard', owner: 'you' },
+      effect: { type: 'grant_keyword_until_eot', keyword: 'indestructible', target: 'self' }
+    });
+    const result = applyGrantKeywordUntilEOT(item, state, mockHelpers());
+    const updated = result.players.you.battlefield[0];
+    expect(updated.keywords).toContain('indestructible');
+    expect(updated._grantedKeywordsEOT).toContain('indestructible');
+  });
+
+  it('does not duplicate keyword if already present, but still tracks the grant for cleanup', () => {
+    const slick = createCreature({
+      card_id: 'slick-1', instance_id: 'slick-1', name: 'Slickshot Show-Off', owner: 'you',
+      keywords: ['flying'],
+    });
+    const state = makeGameState({ battlefield: [slick] });
+    const item = createStackItem({
+      source: { card_id: 'slick-1', instance_id: 'slick-1', name: 'Slickshot', owner: 'you' },
+      effect: { type: 'grant_keyword_until_eot', keyword: 'flying', target: 'self' }
+    });
+    const result = applyGrantKeywordUntilEOT(item, state, mockHelpers());
+    const updated = result.players.you.battlefield[0];
+    expect(updated.keywords.filter(k => k === 'flying').length).toBe(1);
+    expect(updated._grantedKeywordsEOT).toContain('flying');
+  });
+
+  it('no-op when source not on battlefield', () => {
+    const state = makeGameState();
+    const item = createStackItem({
+      source: { card_id: 'ghost-1', instance_id: 'ghost-1', name: 'Ghost', owner: 'you' },
+      effect: { type: 'grant_keyword_until_eot', keyword: 'indestructible', target: 'self' }
+    });
+    const result = applyGrantKeywordUntilEOT(item, state, mockHelpers());
+    expect(result.players.you.battlefield.length).toBe(0);
   });
 });

@@ -27,7 +27,7 @@ const formatActivatedCost = (cost: Cost | string | undefined): string => {
 interface PuzzleCardProps {
   card: Card | Permanent;
   showBack?: boolean;
-  location?: 'hand' | 'battlefield' | 'graveyard' | 'exile';
+  location?: 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'library';
   owner?: PlayerKey;
 }
 
@@ -117,6 +117,7 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
     completeTriggerTarget,
     // Timing
     canCastSorcerySpeed,
+    canCastFromLibraryTop,
     // Modal spell
     modalSpellState,
     completeModalSpellTarget,
@@ -159,6 +160,10 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
   // one they were plotted on (and only at sorcery speed, which the cast path
   // already enforces).
   const isInExile = location === 'exile';
+  const isInLibrary = location === 'library';
+  // Vizier of the Menagerie / Future Sight / Conspicuous Snoop top-of-library cast
+  const canCastFromLibrary = isInLibrary && owner === 'you' && !isTargeting &&
+    !!(canCastFromLibraryTop?.(card as Card));
   const _impulseEntry = gameState?.impulsedCards?.find(ic => ic.card.instance_id === card.instance_id);
   const _plotReady = !_impulseEntry?.plotted || (_impulseEntry.castableFromTurn ?? 0) <= (gameState?.turnNumber ?? 0);
   const canPlayFromExile = isInExile && owner === 'you' && !isTargeting && !!_impulseEntry && _plotReady;
@@ -391,7 +396,8 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
   const effectiveActivated = (isOnBattlefield && gameState)
     ? getEffectiveActivatedAbilities(
         card as Permanent,
-        [...(gameState.players.you.battlefield || []), ...(gameState.players.opponent.battlefield || [])]
+        [...(gameState.players.you.battlefield || []), ...(gameState.players.opponent.battlefield || [])],
+        gameState.players[owner === 'opponent' ? 'opponent' : 'you'].library?.[0] || null
       )
     : (card.activated_abilities || []);
   const hasActivatedAbility = effectiveActivated.length > 0 && !landAbilitiesSuppressed;
@@ -622,6 +628,17 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
           ...(fb.sacrifice ? { _flashbackSacrifice: fb.sacrifice } : {})
         };
         selectCardFromHand(flashbackCard as Card, rect);
+      }
+      return;
+    }
+
+    // Cast from top of library (Vizier of the Menagerie / Future Sight /
+    // Conspicuous Snoop). Normal mana cost — the cast pipeline splices the
+    // card out of library (and decrements library_count) automatically.
+    if (canCastFromLibrary && !isDeclaringAttackers && !stormTargetingState && !copyTargetingState && !sacrificeMode && selectCardFromHand) {
+      const rect = cardRef.current?.getBoundingClientRect();
+      if (rect) {
+        selectCardFromHand(card as Card, rect);
       }
       return;
     }
@@ -1611,6 +1628,9 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
           )}
           {canPlayFromExile && (
             <div className="text-xs text-red-400 mt-2">Click to play from exile</div>
+          )}
+          {canCastFromLibrary && (
+            <div className="text-xs text-purple-300 mt-2">Click to cast from top of library</div>
           )}
           {isInHand && owner === 'you' && hasEvoke && (
             <div className="text-xs text-pink-400">Right-click to evoke</div>

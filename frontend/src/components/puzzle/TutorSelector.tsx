@@ -6,7 +6,8 @@ const TutorSelector: FC = () => {
 
   if (!tutorSelectionState) return null;
 
-  const { cards, allCards, filter, reason, destination } = tutorSelectionState;
+  const { cards, allCards, filter, reason, destination, source } = tutorSelectionState;
+  const isWish = source === 'sideboard';
 
   const validIds = new Set(cards.map((c: any) => c.instance_id || c.card_id));
 
@@ -36,7 +37,9 @@ const TutorSelector: FC = () => {
           {reason}
         </div>
         <div className="text-blue-400 text-sm text-center mb-1">
-          Search your library — choose a card to put into {destLabel}
+          {isWish
+            ? `Reveal a card from outside the game — choose one to put into your ${destLabel}`
+            : `Search your library — choose a card to put into ${destLabel}`}
         </div>
         {filterLabel && (
           <div className="text-blue-300 text-xs text-center mb-3">

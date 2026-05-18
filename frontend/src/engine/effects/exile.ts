@@ -475,3 +475,31 @@ export const applyExileTargetCreature = (
 
   return newState;
 };
+
+/**
+ * Exile this card from its owner's graveyard. Used by Bridge from Below when
+ * an opponent's creature dies — Bridge moves itself from graveyard to exile.
+ */
+export const applyExileSelfFromGraveyard = (
+  stackItem: StackItem,
+  gameState: GameState,
+  { addLog }: EffectHelpers
+): GameState => {
+  const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
+  const sourceId = (stackItem.source as any)?.instance_id;
+  if (!sourceId) return newState;
+
+  for (const playerKey of ['you', 'opponent'] as PlayerKey[]) {
+    const player = newState.players[playerKey];
+    const gy = player.graveyard || [];
+    const idx = gy.findIndex((c: any) => c.instance_id === sourceId);
+    if (idx >= 0) {
+      const [card] = gy.splice(idx, 1);
+      player.exile = player.exile || [];
+      player.exile.push(card);
+      addLog(`${(stackItem.source as any).name} is exiled from the graveyard.`);
+      return newState;
+    }
+  }
+  return newState;
+};

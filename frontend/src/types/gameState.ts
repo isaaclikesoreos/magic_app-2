@@ -39,6 +39,10 @@ export interface Player {
   battlefield: Permanent[];
   graveyard: Card[];
   exile: Card[];
+  // "Outside the game" — cards a wishboard / sideboard effect can pull from
+  // (Karn, the Great Creator's -2; Mastermind's Acquisition; etc.). Optional;
+  // puzzles populate via puzzle_data, Freestyle via God Mode.
+  sideboard?: Card[];
 
   // For opponent (hidden hand)
   hand_count?: number;
@@ -91,6 +95,19 @@ export interface GameState {
   // Delayed returns (Flickerwisp, etc.)
   pendingEndStepReturns?: Array<{ permanent: Permanent; owner: PlayerKey }>;
   _flickeredPermanents?: Array<{ permanent: Permanent; owner: PlayerKey }>;
+
+  // Karn-style "becomes a creature until your next turn" animations. Each
+  // entry snapshots the original type_line / P/T so the turn-rollover loop
+  // can revert at expiresAtTurn (= turn-of-animation + 1).
+  _animatedArtifacts?: Array<{
+    instance_id: string;
+    owner: PlayerKey;
+    cmc: number;
+    originalTypeLine: string;
+    originalPower?: string | null;
+    originalToughness?: string | null;
+    expiresAtTurn: number;
+  }>;
 
   // Cards exiled under permanents (Banishing Light, Oblivion Ring, etc.)
   // Key: instance_id of the exiling permanent. Value: array of exiled cards + owner info.

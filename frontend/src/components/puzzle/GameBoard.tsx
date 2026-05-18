@@ -21,6 +21,7 @@ import EndurePrompt from './EndurePrompt';
 import TargetedDiscardSelector from './TargetedDiscardSelector';
 import SpellModalChoice from './SpellModalChoice';
 import TutorSelector from './TutorSelector';
+import MultiTutorSelector from './MultiTutorSelector';
 import ScrySelector from './ScrySelector';
 import SuspendCastPrompt from './SuspendCastPrompt';
 import CollectEvidenceSelector from './CollectEvidenceSelector';
@@ -111,6 +112,7 @@ const GameBoard: FC = () => {
         <TargetedDiscardSelector />
         <SpellModalChoice />
         <TutorSelector />
+        <MultiTutorSelector />
         <ScrySelector />
         <SuspendCastPrompt />
         <CollectEvidenceSelector />

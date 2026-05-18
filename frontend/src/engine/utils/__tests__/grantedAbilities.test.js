@@ -90,4 +90,70 @@ describe('getEffectiveActivatedAbilities', () => {
     const result = getEffectiveActivatedAbilities(c, [c]);
     expect(result.length).toBe(0);
   });
+
+  describe('grant_activated_from_top_library (Conspicuous Snoop)', () => {
+    const snoop = () => creature({
+      name: 'Conspicuous Snoop',
+      type_line: 'Creature — Goblin Rogue',
+      static_abilities: [{
+        type: 'static',
+        effect: {
+          type: 'grant_activated_from_top_library',
+          filter: { types: ['goblin'] },
+        },
+      }],
+    });
+
+    it('grants activated abilities from a Goblin on top of library', () => {
+      const s = snoop();
+      const topCard = {
+        instance_id: 'top-1',
+        card_id: 208,
+        name: 'Goblin Sharpshooter',
+        type_line: 'Creature — Goblin',
+        activated_abilities: [{
+          type: 'activated',
+          cost: { tap: true },
+          effect: { type: 'damage', amount: 1, target: 'creature_or_player' },
+          description: '{T}: Deal 1 damage to any target.',
+        }],
+      };
+      const result = getEffectiveActivatedAbilities(s, [s], topCard);
+      expect(result.length).toBe(1);
+      expect(result[0].effect.type).toBe('damage');
+      expect(result[0]._grantedBy).toBe('top-of-library');
+    });
+
+    it('does not grant abilities when top card is not a Goblin', () => {
+      const s = snoop();
+      const topCard = {
+        instance_id: 'top-2',
+        card_id: 1,
+        name: 'Lightning Bolt',
+        type_line: 'Instant',
+        activated_abilities: [{ cost: { tap: true }, effect: { type: 'damage' } }],
+      };
+      const result = getEffectiveActivatedAbilities(s, [s], topCard);
+      expect(result.length).toBe(0);
+    });
+
+    it('returns empty when topOfYourLibrary omitted', () => {
+      const s = snoop();
+      const result = getEffectiveActivatedAbilities(s, [s]);
+      expect(result.length).toBe(0);
+    });
+
+    it('returns empty when top Goblin has no activated abilities', () => {
+      const s = snoop();
+      const topCard = {
+        instance_id: 'top-3',
+        card_id: 99,
+        name: 'Vanilla Goblin Token',
+        type_line: 'Token Creature — Goblin',
+        activated_abilities: [],
+      };
+      const result = getEffectiveActivatedAbilities(s, [s], topCard);
+      expect(result.length).toBe(0);
+    });
+  });
 });

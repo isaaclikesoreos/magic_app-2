@@ -100,6 +100,15 @@ export type EffectType =
   | 'random_discard'
   | 'player_choice_discard'
   | 'grant_flashback'
+  | 'cast_from_graveyard_free'
+  | 'library_multi_tutor_top'
+  | 'create_token_copy'
+  | 'look_at_top_of_library'
+  | 'cast_from_top_of_library'
+  | 'grant_activated_from_top_library'
+  | 'exile_self_from_graveyard'
+  | 'animate_artifact_as_creature'
+  | 'wish_from_sideboard'
   | 'return_from_graveyard_to_hand'
   | 'modal_spell'
   | 'tutor'
@@ -151,6 +160,10 @@ export interface Trigger {
   event: TriggerEvent;
   source?: 'self' | 'other' | 'any' | 'controller' | 'opponent';
   condition?: Condition;
+  // Zone the source of this trigger must reside in for the trigger to fire.
+  // Default 'battlefield'. Use 'graveyard' for Bridge from Below-style triggers
+  // that fire while the source is in the graveyard.
+  self_zone?: 'battlefield' | 'graveyard';
 }
 
 // Triggered Ability

@@ -125,6 +125,22 @@ export const applyCreateToken = (
     const counterType = countFrom.counter_type || '+1/+1';
     const dyingCounters = (stackItem as any).triggerContext?.dyingCounters || {};
     tokenCount = dyingCounters[counterType] || 0;
+  } else if (countFrom?.type === 'permanent_count') {
+    // Count permanents on the battlefield matching a filter. Used for cards
+    // like Krenko, Mob Boss ("X is the number of Goblins you control") and
+    // similar "for each" scaling token effects.
+    const filter = countFrom.filter || {};
+    const controller: 'you' | 'opponent' | 'any' = filter.controller || 'you';
+    const types: string[] = filter.types || [];
+    const players: PlayerKey[] = controller === 'any' ? ['you', 'opponent'] : [controller];
+    let n = 0;
+    for (const pk of players) {
+      for (const p of (newState.players[pk].battlefield || [])) {
+        const tl = (p.type_line || '').toLowerCase();
+        if (types.length === 0 || types.some(t => tl.includes(t.toLowerCase()))) n++;
+      }
+    }
+    tokenCount = n;
   } else if (rawCount === 'x' || rawCount === 'X') {
     tokenCount = stackItem.effect.xValue ?? 0;
   } else {
@@ -168,6 +184,165 @@ export const applyCreateToken = (
     }
   }
 
+  return newState;
+};
+
+/**
+ * Create a token that's a copy of a target creature (Kiki-Jiki, Mirror Breaker;
+ * Splinter Twin; Saheeli, Sublime Artificer; etc.).
+ *
+ * Reads the target's printed characteristics — name, type_line, mana_cost,
+ * oracle_text, P/T, colors, keywords, and abilities. Runtime state (damage,
+ * counters, buffPower/Toughness, attached auras/equipment) is NOT copied per
+ * MTG's "copiable values" rule.
+ *
+ * Extras:
+ *   - extra_keywords: keywords merged onto the copy on top of the target's
+ *     (Kiki-Jiki adds 'haste').
+ *   - sac_at_end_step: if true, a `end_step → sacrifice_self` triggered
+ *     ability is baked into the token so the existing end-step trigger
+ *     detector handles the delayed sacrifice without any new infrastructure.
+ */
+export const applyCreateTokenCopy = (
+  stackItem: StackItem,
+  gameState: GameState,
+  { addLog }: EffectHelpers
+): GameState => {
+  const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
+  const target = stackItem.targeting_data?.targetData as any;
+  if (!target) {
+    addLog(`${stackItem.source.name}: copy fizzled — no target.`);
+    return newState;
+  }
+
+  const owner = ((stackItem.source as any).owner || 'you') as PlayerKey;
+  const player = newState.players[owner];
+
+  const extraKeywords: string[] = (stackItem.effect as any).extra_keywords || [];
+  const sacAtEndStep = !!(stackItem.effect as any).sac_at_end_step;
+
+  const merged = Array.from(new Set([...(target.keywords || []), ...extraKeywords]));
+  const triggered: any[] = [...(target.triggered_abilities || [])];
+  if (sacAtEndStep) {
+    triggered.push({
+      type: 'triggered',
+      trigger: { event: 'end_step', source: 'self' },
+      effect: { type: 'sacrifice_self' },
+      description: 'Sacrifice at the beginning of the next end step.',
+    });
+  }
+
+  const uid = `token-copy-${target.name}-${Date.now()}-${Math.random()}`;
+  const baseTL: string = target.type_line || 'Creature';
+  const typeLine = baseTL.toLowerCase().includes('token') ? baseTL : `Token ${baseTL}`;
+
+  const tokenCard: Record<string, any> = {
+    card_id: uid,
+    instance_id: uid,
+    name: target.name,
+    type_line: typeLine,
+    mana_cost: target.mana_cost || '',
+    oracle_text: target.oracle_text || '',
+    power: String(target.power ?? '0'),
+    toughness: String(target.toughness ?? '0'),
+    colors: [...(target.colors || [])],
+    keywords: merged,
+    isToken: true,
+    is_token: true,
+    tapped: false,
+    summoning_sick: !merged.includes('haste'),
+    counters: {},
+    cardOwner: owner,
+  };
+  if (triggered.length > 0) tokenCard.triggered_abilities = triggered;
+  if (target.activated_abilities?.length > 0) tokenCard.activated_abilities = [...target.activated_abilities];
+  if (target.static_abilities?.length > 0) tokenCard.static_abilities = [...target.static_abilities];
+  if (target.spell_effect) tokenCard.spell_effect = target.spell_effect;
+
+  player.battlefield = player.battlefield || [];
+  player.battlefield.push(tokenCard as any);
+
+  // Surface the freshly-created token so resolveStack can fire its ETB triggers
+  // (Dark-Dwellers' cast-from-graveyard, Snapcaster's grant_flashback, Soul
+  // Warden's "creature enters" — anything keyed on creature_entered).
+  (newState as any)._tokensCreated = (newState as any)._tokensCreated || [];
+  (newState as any)._tokensCreated.push({ token: tokenCard, owner });
+
+  const extras = extraKeywords.length > 0 ? ` with ${extraKeywords.join(', ')}` : '';
+  addLog(`${stackItem.source.name}: created a token copy of ${target.name}${extras}.`);
+  return newState;
+};
+
+/**
+ * Animate a noncreature artifact as an artifact creature with power and
+ * toughness equal to its converted mana cost (Karn, the Great Creator's +1).
+ *
+ * Until your next turn (revert handled by the turn-rollover loop, which scans
+ * _animatedArtifacts and restores the original characteristics when the
+ * tracked turn has come around).
+ *
+ * Real MTG: the artifact gets the "creature" type added to its types and
+ * acquires base P/T = mana value. Power/toughness modifications from counters
+ * and buffs still stack on top.
+ */
+export const applyAnimateArtifactAsCreature = (
+  stackItem: StackItem,
+  gameState: GameState,
+  { addLog }: EffectHelpers
+): GameState => {
+  const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
+  const targetData = stackItem.targeting_data?.targetData as any;
+  if (!targetData) {
+    addLog(`${stackItem.source.name}: animate fizzled — no target.`);
+    return newState;
+  }
+  const targetOwner = (targetData.owner || 'you') as PlayerKey;
+  const matchId = targetData.instance_id || targetData.card_id;
+  const targetPlayer = newState.players[targetOwner];
+  const target = targetPlayer.battlefield?.find((p: any) =>
+    (p.instance_id || p.card_id) === matchId
+  );
+  if (!target) {
+    addLog(`${stackItem.source.name}: target artifact is no longer on the battlefield.`);
+    return newState;
+  }
+
+  const cmc = calculateCMC(target.mana_cost || '');
+
+  // Snapshot for revert.
+  const originalTypeLine = target.type_line || 'Artifact';
+  const originalPower = target.power;
+  const originalToughness = target.toughness;
+
+  // Mutate. Insert "Creature" if not present in the type line.
+  const lowerTL = originalTypeLine.toLowerCase();
+  if (!lowerTL.includes('creature')) {
+    // "Artifact" → "Artifact Creature"; "Artifact — Equipment" → "Artifact Creature — Equipment"
+    if (originalTypeLine.includes('—')) {
+      const [main, sub] = originalTypeLine.split('—').map((s: string) => s.trim());
+      target.type_line = `${main} Creature — ${sub}`;
+    } else {
+      target.type_line = `${originalTypeLine} Creature`;
+    }
+  }
+  target.power = String(cmc);
+  target.toughness = String(cmc);
+  target.summoning_sick = true;
+
+  // Track for revert.
+  const expiresAtTurn = (newState.turnNumber || 1) + 1;
+  (newState as any)._animatedArtifacts = (newState as any)._animatedArtifacts || [];
+  (newState as any)._animatedArtifacts.push({
+    instance_id: target.instance_id,
+    owner: targetOwner,
+    cmc,
+    originalTypeLine,
+    originalPower,
+    originalToughness,
+    expiresAtTurn,
+  });
+
+  addLog(`${stackItem.source.name}: ${target.name} becomes a ${cmc}/${cmc} artifact creature until your next turn.`);
   return newState;
 };
 
@@ -392,14 +567,25 @@ export const applySacrificeSelf = (
     targetPlayer.battlefield = targetPlayer.battlefield.filter((c: Permanent) => c.instance_id !== instanceId);
     removeAttachedAuras(newState, instanceId!);
     pushToGraveyardOrExile(newState, targetPlayer, creature);
-    addLog(`${creature.name} is sacrificed due to evoke.`);
-    // Track for death trigger dispatch in resolveStack
-    newState._dyingCreatures = newState._dyingCreatures || [];
-    newState._dyingCreatures.push({ creature, owner: creatureOwner });
+    addLog(`${creature.name} is sacrificed.`);
+    // Track for downstream trigger dispatch in resolveStack:
+    //   _dyingCreatures        → creature_died (Blood Artist, Cruel Celebrant) — CREATURES ONLY
+    //   _leavingPermanents     → permanent_left
+    //   _sacrificedPermanents  → permanent_sacrificed (Mayhem Devil)
+    // Only creatures "die" (rule 700.4). Non-creature artifacts like Goblin
+    // Boom Keg leave the battlefield without firing creature_died — their
+    // self-death triggers route through detectPermanentLeavesTriggers.
+    const isCreatureSelf = (creature.type_line || '').toLowerCase().includes('creature');
+    if (isCreatureSelf) {
+      newState._dyingCreatures = newState._dyingCreatures || [];
+      newState._dyingCreatures.push({ creature, owner: creatureOwner });
+    }
     newState._leavingPermanents = newState._leavingPermanents || [];
     newState._leavingPermanents.push({ permanent: creature, owner: creatureOwner });
+    newState._sacrificedPermanents = newState._sacrificedPermanents || [];
+    newState._sacrificedPermanents.push({ permanent: creature, owner: creatureOwner });
   } else {
-    addLog(`Evoke sacrifice: could not find creature with instance_id ${instanceId} on battlefield.`);
+    addLog(`Sacrifice self: could not find creature with instance_id ${instanceId} on battlefield.`);
   }
 
   return newState;

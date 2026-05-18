@@ -69,6 +69,8 @@ export const detectDeathTriggers = (eventData: DeathEventData, gameState: GameSt
         if (matchesTriggerEvent(ability, 'another_creature_dies') || matchesTriggerEvent(ability, 'permanent_dies')) {
           // Skip self-only triggers — those are handled in Section A when the creature itself dies
           if (getTriggerSource(ability) === 'self') return;
+          // Skip triggers gated on graveyard residency — the graveyard scan below handles those.
+          if ((typeof ability.trigger === 'object' ? ability.trigger?.self_zone : undefined) === 'graveyard') return;
           if (permanent.instance_id !== dyingCreature.instance_id) {
             // has_card_type condition — type filter + optional controller filter.
             const trigger = ability.trigger;
@@ -83,6 +85,7 @@ export const detectDeathTriggers = (eventData: DeathEventData, gameState: GameSt
               const reqController = condition.controller ?? 'any';
               if (reqController === 'you' && owner !== 'you') return;
               if (reqController === 'opponent' && owner === 'you') return;
+              if (condition.not_token && isTokenCreature(dyingCreature)) return;
             }
             triggersToAdd.push(createTriggerStackItem('death-trigger', permanent, ability, 'you', {
               triggerContext: { dyingPermanentCMC: calculateCMC(dyingCreature.mana_cost) }
@@ -93,7 +96,53 @@ export const detectDeathTriggers = (eventData: DeathEventData, gameState: GameSt
     }
   });
 
+  // Graveyard-resident death triggers (Bridge from Below). Triggers with
+  // `trigger.self_zone === 'graveyard'` fire from the graveyard rather than
+  // the battlefield. Controller of the trigger is the graveyard's owner;
+  // `condition.controller` is relative to that.
+  (['you', 'opponent'] as PlayerKey[]).forEach(gyOwner => {
+    const gy = gameState.players[gyOwner].graveyard || [];
+    gy.forEach(card => {
+      const cardAny = card as any;
+      const abilities = (cardAny.triggered_abilities || []) as any[];
+      if (abilities.length === 0) return;
+      abilities.forEach(ability => {
+        const trigger = ability.trigger;
+        const selfZone = (typeof trigger === 'object' ? trigger?.self_zone : undefined);
+        if (selfZone !== 'graveyard') return;
+        if (!(matchesTriggerEvent(ability, 'permanent_dies') || matchesTriggerEvent(ability, 'dies'))) return;
+
+        const condition = (typeof trigger === 'object' ? trigger?.condition : undefined) || ability.condition;
+        if (condition?.type === 'has_card_type') {
+          const requiredTypes: string[] = condition.types || condition.card_types || [];
+          const dyingTypeLine = (dyingCreature.type_line || '').toLowerCase();
+          if (requiredTypes.length > 0) {
+            const matchesType = requiredTypes.some(t => dyingTypeLine.includes(t.toLowerCase()));
+            if (!matchesType) return;
+          }
+          const reqController = condition.controller ?? 'any';
+          if (reqController === 'you' && owner !== gyOwner) return;
+          if (reqController === 'opponent' && owner === gyOwner) return;
+          if (condition.not_token && isTokenCreature(dyingCreature)) return;
+        }
+        triggersToAdd.push(createTriggerStackItem('gy-death-trigger', card as Permanent, ability, gyOwner, {
+          triggerContext: { dyingPermanentCMC: calculateCMC(dyingCreature.mana_cost) }
+        }));
+      });
+    });
+  });
+
   return triggersToAdd;
+};
+
+// Token detection: applyCreateToken / applyCreateTokenCopy set isToken: true
+// on every engine-created token and prefix the type_line with "Token ". We
+// avoid the string-card_id heuristic here (test fixtures use string ids
+// without being tokens).
+const isTokenCreature = (c: Permanent): boolean => {
+  return !!(c as any).isToken
+    || !!(c as any).is_token
+    || ((c.type_line || '').toLowerCase().startsWith('token '));
 };
 
 /**
@@ -110,6 +159,22 @@ export const detectPermanentLeavesTriggers = (eventData: PermanentLeavesEventDat
   const triggersToAdd: StackItem[] = [];
   const leavingTypeLine = (leavingPermanent.type_line || '').toLowerCase();
   const leavingIsCreature = leavingTypeLine.includes('creature');
+
+  // The leaving permanent's OWN self-death triggers for non-creatures.
+  // Creature self-death is handled in detectDeathTriggers Section A. Note:
+  // permanent_leaves_battlefield is a "when ANOTHER permanent leaves" trigger
+  // by definition; we do NOT fire it for self here.
+  const ownAbilities = (leavingPermanent as any).triggered_abilities || [];
+  ownAbilities.forEach((ability: any) => {
+    const trigger = ability.trigger;
+    const source = (typeof trigger === 'object' ? trigger?.source : undefined);
+    if (source !== undefined && source !== 'self') return;
+    const isDeathEvent =
+      (matchesTriggerEvent(ability, 'permanent_dies') || matchesTriggerEvent(ability, 'dies'))
+      && !leavingIsCreature;
+    if (!isDeathEvent) return;
+    triggersToAdd.push(createTriggerStackItem('self-leaves', leavingPermanent, ability, leavingOwner));
+  });
 
   const checkPlayer = (playerObj: Player, playerKey: PlayerKey): void => {
     playerObj.battlefield?.forEach(permanent => {

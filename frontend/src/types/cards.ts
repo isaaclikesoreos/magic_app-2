@@ -52,6 +52,7 @@ export interface Card {
   _loyaltyActivatedThisTurn?: boolean;  // PW once-per-turn gate
   protection?: string[];  // Array of protection colors/types (e.g., ['R', 'W'])
   protection_until_end_of_turn?: boolean;  // Flag to clear at end of turn
+  _grantedKeywordsEOT?: string[];  // Keywords granted by an effect, cleared EOT
   cardOwner?: 'you' | 'opponent';  // Original owner (for zone routing)
 
   // Abilities (can be nested or flat)

@@ -52,7 +52,7 @@ const MANA_COLORS = [
   { key: 'C', label: 'C', bg: 'bg-gray-400', text: 'text-gray-900' },
 ];
 
-type ZoneOption = 'hand' | 'battlefield' | 'graveyard' | 'library';
+type ZoneOption = 'hand' | 'battlefield' | 'graveyard' | 'library' | 'sideboard';
 type PlayerOption = 'you' | 'opponent';
 
 const ZONE_OPTIONS: { value: ZoneOption; label: string }[] = [
@@ -60,6 +60,7 @@ const ZONE_OPTIONS: { value: ZoneOption; label: string }[] = [
   { value: 'battlefield', label: 'Battlefield' },
   { value: 'graveyard', label: 'Graveyard' },
   { value: 'library', label: 'Library' },
+  { value: 'sideboard', label: 'Sideboard (wishboard)' },
 ];
 
 const GodModePanel: FC = () => {

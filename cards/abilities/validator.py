@@ -45,6 +45,7 @@ VALID_EFFECT_TYPES = {
     'add_mana', 'altar_add_mana', 'channel_activate',
     # Battlefield
     'enter_battlefield', 'enter_battlefield_permanent', 'create_token',
+    'create_token_copy',
     'destroy', 'sacrifice', 'sacrifice_self', 'return_to_hand',
     'destroy_land', 'wildfire', 'target_player_sacrifice',
     # Roles
@@ -53,6 +54,16 @@ VALID_EFFECT_TYPES = {
     'grant_keywords_equipped',
     # Counter spells
     'counter_spell', 'counter_return_to_hand', 'counter_unless_pay',
+    # Cast from graveyard
+    'grant_flashback', 'cast_from_graveyard_free',
+    # Library search / reorder
+    'library_multi_tutor_top',
+    # Top of library awareness
+    'look_at_top_of_library', 'cast_from_top_of_library', 'grant_activated_from_top_library',
+    # Graveyard-resident effects
+    'exile_self_from_graveyard',
+    # Planeswalker / wish
+    'animate_artifact_as_creature', 'wish_from_sideboard',
     # Untap / equipment
     'untap_self', 'attach_self_to_triggering_creature', 'equip', 'doesnt_untap',
     # Granted abilities (equipment)

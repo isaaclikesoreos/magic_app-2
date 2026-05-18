@@ -149,3 +149,132 @@ describe('detectPermanentLeavesTriggers', () => {
     expect(triggers.length).toBe(0);
   });
 });
+
+describe('Bridge from Below graveyard-resident triggers', () => {
+  const bridgeFirstAbility = {
+    type: 'triggered',
+    trigger: {
+      event: 'permanent_dies', source: 'any', self_zone: 'graveyard',
+      condition: { type: 'has_card_type', types: ['creature'], controller: 'you', not_token: true },
+    },
+    effect: {
+      type: 'create_token', count: 1,
+      token: { name: 'Zombie Token', type_line: 'Token Creature — Zombie', power: 2, toughness: 2, colors: ['B'] },
+    },
+  };
+  const bridgeSecondAbility = {
+    type: 'triggered',
+    trigger: {
+      event: 'permanent_dies', source: 'any', self_zone: 'graveyard',
+      condition: { type: 'has_card_type', types: ['creature'], controller: 'opponent' },
+    },
+    effect: { type: 'exile_self_from_graveyard' },
+  };
+  const makeBridge = (instance_id) => ({
+    instance_id, card_id: 999, name: 'Bridge from Below',
+    type_line: 'Enchantment',
+    triggered_abilities: [bridgeFirstAbility, bridgeSecondAbility],
+  });
+
+  it('fires the zombie token trigger when your nontoken creature dies (bridge in your graveyard)', () => {
+    const bridge = makeBridge('bridge-1');
+    const dying = createCreature({ instance_id: 'd-1', name: 'Plaguecrafter', type_line: 'Creature — Human Shaman' });
+    const state = makeGameState({ graveyard: [bridge] });
+    const triggers = detectDeathTriggers({ creature: dying, owner: 'you' }, state);
+    const tokenTriggers = triggers.filter(t => t.effect?.type === 'create_token');
+    expect(tokenTriggers.length).toBe(1);
+  });
+
+  it('does NOT fire zombie token trigger for token deaths', () => {
+    const bridge = makeBridge('bridge-2');
+    const dyingToken = { instance_id: 'tok-1', card_id: 'token-zombie-x', name: 'Zombie Token',
+      type_line: 'Token Creature — Zombie', isToken: true };
+    const state = makeGameState({ graveyard: [bridge] });
+    const triggers = detectDeathTriggers({ creature: dyingToken, owner: 'you' }, state);
+    const tokenTriggers = triggers.filter(t => t.effect?.type === 'create_token');
+    expect(tokenTriggers.length).toBe(0);
+  });
+
+  it('fires the exile-self trigger when opponent creature dies', () => {
+    const bridge = makeBridge('bridge-3');
+    const dying = createCreature({ instance_id: 'd-2', name: 'Baneslayer', type_line: 'Creature — Angel' });
+    const state = makeGameState({ graveyard: [bridge] });
+    const triggers = detectDeathTriggers({ creature: dying, owner: 'opponent' }, state);
+    const exileTriggers = triggers.filter(t => t.effect?.type === 'exile_self_from_graveyard');
+    expect(exileTriggers.length).toBe(1);
+    // Also: zombie token trigger should NOT fire (creature was opponent's)
+    const tokenTriggers = triggers.filter(t => t.effect?.type === 'create_token');
+    expect(tokenTriggers.length).toBe(0);
+  });
+
+  it('exile-self trigger fires even when opponent token dies (no not_token filter on that one)', () => {
+    const bridge = makeBridge('bridge-4');
+    const dyingToken = { instance_id: 'tok-2', card_id: 'token-x', name: 'Saproling',
+      type_line: 'Token Creature — Saproling', isToken: true };
+    const state = makeGameState({ graveyard: [bridge] });
+    const triggers = detectDeathTriggers({ creature: dyingToken, owner: 'opponent' }, state);
+    const exileTriggers = triggers.filter(t => t.effect?.type === 'exile_self_from_graveyard');
+    expect(exileTriggers.length).toBe(1);
+  });
+
+  it('does not fire when Bridge is on the battlefield (no self_zone match)', () => {
+    const bridgeOnBF = { ...makeBridge('bridge-5') };
+    const dying = createCreature({ instance_id: 'd-3', name: 'Whatever' });
+    const state = makeGameState({ battlefield: [bridgeOnBF] });
+    const triggers = detectDeathTriggers({ creature: dying, owner: 'you' }, state);
+    const tokenTriggers = triggers.filter(t => t.effect?.type === 'create_token');
+    const exileTriggers = triggers.filter(t => t.effect?.type === 'exile_self_from_graveyard');
+    expect(tokenTriggers.length).toBe(0);
+    expect(exileTriggers.length).toBe(0);
+  });
+
+  it('fires twice when two Bridges are in graveyard and a nontoken creature dies', () => {
+    const b1 = makeBridge('bridge-6a');
+    const b2 = makeBridge('bridge-6b');
+    const dying = createCreature({ instance_id: 'd-4', name: 'Plaguecrafter' });
+    const state = makeGameState({ graveyard: [b1, b2] });
+    const triggers = detectDeathTriggers({ creature: dying, owner: 'you' }, state);
+    const tokenTriggers = triggers.filter(t => t.effect?.type === 'create_token');
+    expect(tokenTriggers.length).toBe(2);
+  });
+});
+
+describe('Self-death trigger on non-creature artifact (Goblin Boom Keg)', () => {
+  const makeBoomKeg = (instance_id) => ({
+    instance_id, card_id: 888, name: 'Goblin Boom Keg',
+    type_line: 'Artifact',
+    triggered_abilities: [{
+      type: 'triggered',
+      trigger: { event: 'permanent_dies', source: 'self' },
+      effect: { type: 'damage', amount: 3, target: 'any', valid_targets: ['creature', 'player', 'planeswalker'] },
+      requires_input: true,
+    }],
+  });
+
+  it('fires the artifact self-death damage trigger from permanent_left event', () => {
+    const keg = makeBoomKeg('keg-1');
+    const state = makeGameState();
+    const triggers = detectPermanentLeavesTriggers({ permanent: keg, owner: 'you' }, state);
+    const damageTriggers = triggers.filter(t => t.effect?.type === 'damage');
+    expect(damageTriggers.length).toBe(1);
+    expect(damageTriggers[0].effect.amount).toBe(3);
+  });
+
+  it('does NOT double-fire creature self-death from permanent_left (gated to non-creature)', () => {
+    // A creature with a permanent_dies + source: self trigger — like Hangarback.
+    // detectDeathTriggers Section A handles this; detectPermanentLeavesTriggers
+    // must NOT also fire it.
+    const hangarback = createCreature({
+      instance_id: 'hb-1', name: 'Hangarback Walker',
+      type_line: 'Artifact Creature — Construct',
+      triggered_abilities: [{
+        trigger: { event: 'dies', source: 'self' },
+        effect: { type: 'create_token', count: 2 },
+      }],
+    });
+    const state = makeGameState();
+    const triggers = detectPermanentLeavesTriggers({ permanent: hangarback, owner: 'you' }, state);
+    const tokenTriggers = triggers.filter(t => t.effect?.type === 'create_token');
+    expect(tokenTriggers.length).toBe(0);
+  });
+});

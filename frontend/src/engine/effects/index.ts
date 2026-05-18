@@ -6,13 +6,13 @@
 import { applyDamage, applyDamageDivided, applyDamageAll, applyDamagePerNonbasicLands, applyDealDamageToController, applyDamageToCaster, applyDamageAndSelfDamage, applyCoinFlipDamage } from './damage';
 import { applyGainLife, applyGainLifeEqualToughness, applyGainLifeAndScry, applyDrainLife, applyOpponentLosesLife, applyTargetPlayerLosesLife, applyExtort } from './lifegain';
 import { applyDrawCards, applyEachPlayerDraws, applyMill } from './draw';
-import { applyBuffCreature, applyBuffSelf, applyProwessTrigger } from './buff';
+import { applyBuffCreature, applyBuffSelf, applyProwessTrigger, applyGrantKeywordUntilEOT } from './buff';
 import { applyAddCounterToSelf, applyAddCounterToSource, applyAddCounterToEachCreature } from './counters';
 import { applyAddMana, applyChannelActivate } from './mana';
-import { applyEnterBattlefield, applyEnterBattlefieldPermanent, applyCreateToken, applySacrificeSelf, applyReanimateCreature, applyAttachAura, applyYawgmothsWill, applySacrificeAttached, applyEquip, applyAttachSelfToTriggeringCreature } from './battlefield';
+import { applyEnterBattlefield, applyEnterBattlefieldPermanent, applyCreateToken, applyCreateTokenCopy, applySacrificeSelf, applyReanimateCreature, applyAttachAura, applyYawgmothsWill, applySacrificeAttached, applyEquip, applyAttachSelfToTriggeringCreature, applyAnimateArtifactAsCreature } from './battlefield';
 import { applyDestroy, applyDestroyLand, applyWildfire, applyDestroyAll, applyTargetPlayerSacrifice } from './destruction';
 import { applyGrantProtection } from './protection';
-import { applyExileAllGraveyards, applyFlicker, applyExileUntilEndStep, applyExileUntilLeaves, applyExileUnder, applyReturnExiledUnder, applyImpulseDraw, applyExileTargetCreature } from './exile';
+import { applyExileAllGraveyards, applyFlicker, applyExileUntilEndStep, applyExileUntilLeaves, applyExileUnder, applyReturnExiledUnder, applyImpulseDraw, applyExileTargetCreature, applyExileSelfFromGraveyard } from './exile';
 import { applyCopySpell } from './copySpell';
 import { applyReturnToHand, applyPutIntoLibrary, applyReturnFromGraveyardToHand } from './bounce';
 import { applyRandomDiscard } from './discard';
@@ -100,6 +100,7 @@ export const effectHandlers: Record<string, EffectHandler> = {
   'buff_creature': applyBuffCreature,
   'buff_self': applyBuffSelf,
   'prowess_trigger': applyProwessTrigger,
+  'grant_keyword_until_eot': applyGrantKeywordUntilEOT,
   'add_counter': applyAddCounterToSelf, // Alias for Pridemate-style triggers
   'add_counter_to_self': applyAddCounterToSelf,
   'add_counter_to_source': applyAddCounterToSource,
@@ -109,6 +110,8 @@ export const effectHandlers: Record<string, EffectHandler> = {
   'enter_battlefield': applyEnterBattlefield,
   'enter_battlefield_permanent': applyEnterBattlefieldPermanent,
   'create_token': applyCreateToken,
+  'create_token_copy': applyCreateTokenCopy,
+  'animate_artifact_as_creature': applyAnimateArtifactAsCreature,
   'sacrifice_self': applySacrificeSelf,
   'reanimate_creature': applyReanimateCreature,
   'destroy': applyDestroy,
@@ -119,6 +122,7 @@ export const effectHandlers: Record<string, EffectHandler> = {
   'target_player_loses_life': applyTargetPlayerLosesLife,
   'grant_protection': applyGrantProtection,
   'exile_all_graveyards': applyExileAllGraveyards,
+  'exile_self_from_graveyard': applyExileSelfFromGraveyard,
   'flicker': applyFlicker,
   'exile_until_end_step': applyExileUntilEndStep,
   'exile_until_leaves': applyExileUntilLeaves,
