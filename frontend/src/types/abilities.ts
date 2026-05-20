@@ -109,6 +109,8 @@ export type EffectType =
   | 'exile_self_from_graveyard'
   | 'animate_artifact_as_creature'
   | 'wish_from_sideboard'
+  | 'every_creature_type'
+  | 'noncreature_spell_cost_more'
   | 'return_from_graveyard_to_hand'
   | 'modal_spell'
   | 'tutor'

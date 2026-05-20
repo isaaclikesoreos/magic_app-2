@@ -1,5 +1,6 @@
 import { pushToGraveyardOrExile, removeAttachedAuras } from '../replacement';
 import { calculateCMC } from '../utils/manaCost';
+import { creatureMatchesTypeFilter } from '../utils/typeMatching';
 import { GameState, StackItem, Card, Permanent, PlayerKey } from '@/types';
 
 
@@ -128,7 +129,9 @@ export const applyCreateToken = (
   } else if (countFrom?.type === 'permanent_count') {
     // Count permanents on the battlefield matching a filter. Used for cards
     // like Krenko, Mob Boss ("X is the number of Goblins you control") and
-    // similar "for each" scaling token effects.
+    // similar "for each" scaling token effects. Routes through
+    // creatureMatchesTypeFilter so Maskwood Nexus / changeling extends type
+    // matching consistently.
     const filter = countFrom.filter || {};
     const controller: 'you' | 'opponent' | 'any' = filter.controller || 'you';
     const types: string[] = filter.types || [];
@@ -136,8 +139,7 @@ export const applyCreateToken = (
     let n = 0;
     for (const pk of players) {
       for (const p of (newState.players[pk].battlefield || [])) {
-        const tl = (p.type_line || '').toLowerCase();
-        if (types.length === 0 || types.some(t => tl.includes(t.toLowerCase()))) n++;
+        if (creatureMatchesTypeFilter(p as any, types, pk, newState)) n++;
       }
     }
     tokenCount = n;

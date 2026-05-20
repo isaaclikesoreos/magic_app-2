@@ -152,9 +152,12 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
   // Yawgmoth's Will: can cast spells from graveyard
   const canCastFromGraveyard = isInGraveyard && owner === 'you' && !isTargeting &&
     !!(gameState?.players.you as any)?.canPlayFromGraveyard;
-  // Flashback: can cast instants/sorceries from graveyard for flashback cost
+  // Flashback / Jump-start: can cast instants/sorceries from graveyard for an
+  // alt cost. flashback.cost = mana cost; flashback.sacrifice = additional
+  // creature-sac cost (Dread Return); flashback.discard = additional discard
+  // cost (Jump-start — Chemister's Insight).
   const canCastFlashback = isInGraveyard && owner === 'you' && !isTargeting &&
-    !canCastFromGraveyard && !!((card as any).flashback?.cost || (card as any).flashback?.sacrifice);
+    !canCastFromGraveyard && !!((card as any).flashback?.cost || (card as any).flashback?.sacrifice || (card as any).flashback?.discard);
   // Impulse draw / Plot: can play cards exiled face-up.
   // Plotted cards add a turn gate — they're only castable on a turn AFTER the
   // one they were plotted on (and only at sorcery speed, which the cast path
@@ -397,7 +400,9 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
     ? getEffectiveActivatedAbilities(
         card as Permanent,
         [...(gameState.players.you.battlefield || []), ...(gameState.players.opponent.battlefield || [])],
-        gameState.players[owner === 'opponent' ? 'opponent' : 'you'].library?.[0] || null
+        gameState.players[owner === 'opponent' ? 'opponent' : 'you'].library?.[0] || null,
+        owner === 'opponent' ? 'opponent' : 'you',
+        gameState,
       )
     : (card.activated_abilities || []);
   const hasActivatedAbility = effectiveActivated.length > 0 && !landAbilitiesSuppressed;
@@ -424,6 +429,36 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
     // Replace the generic cost in the mana cost string
     if (baseGeneric > 0) {
       reducedManaCost = manaCost.replace(/{(\d+)}/, `{${newGeneric}}`);
+    }
+  }
+
+  // Noncreature cost-increase tax from opponent's statics (Thalia, Guardian
+  // of Thraben). Display only — the actual math is folded into getCostReduction.
+  let noncreatureTax = 0;
+  if (isInHand && owner === 'you' && gameState) {
+    const tl = (card.type_line || '').toLowerCase();
+    if (!tl.includes('creature')) {
+      const oppBf = gameState.players.opponent?.battlefield || [];
+      for (const perm of oppBf) {
+        for (const sa of ((perm as any).static_abilities || [])) {
+          if (sa?.effect?.type === 'noncreature_spell_cost_more') {
+            noncreatureTax += sa.effect.amount ?? 1;
+          }
+        }
+      }
+    }
+  }
+  let taxedManaCost = card.mana_cost;
+  if (noncreatureTax > 0) {
+    const manaCost = card.mana_cost || '';
+    const baseGenericMatch = manaCost.match(/{(\d+)}/);
+    const baseGeneric = baseGenericMatch ? parseInt(baseGenericMatch[1]) : 0;
+    const newGeneric = baseGeneric + noncreatureTax;
+    if (baseGenericMatch) {
+      taxedManaCost = manaCost.replace(/{(\d+)}/, `{${newGeneric}}`);
+    } else {
+      // No printed generic — prepend the tax (e.g., {R} → {1}{R}).
+      taxedManaCost = `{${noncreatureTax}}${manaCost}`;
     }
   }
 
@@ -511,7 +546,7 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
   // actor='opponent' (Edicts) auto-resolves — no clicks expected, no highlight.
   const isSacrificeModeCandidate = !!(
     sacrificeMode && sacrificeMode.actor !== 'opponent' && isOnBattlefield &&
-    matchesSacFilter(card as Permanent, owner, sacrificeMode.filter)
+    matchesSacFilter(card as Permanent, owner, sacrificeMode.filter, gameState ?? undefined)
   );
   const isSacrificeModeSelected = !!(
     sacrificeMode?.selected.some(s => s.instance_id === card.instance_id)
@@ -621,11 +656,15 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
       const rect = cardRef.current?.getBoundingClientRect();
       if (rect) {
         const fb = (card as any).flashback;
+        // Jump-start (Chemister's Insight) uses the card's PRINTED mana cost
+        // as the cost — fall back to the original mana_cost when fb.cost is
+        // absent. Flashback (Faithless Looting) sets a distinct fb.cost.
         const flashbackCard = {
           ...card,
-          mana_cost: fb.cost || '',
+          mana_cost: fb.cost || card.mana_cost || '',
           _flashbackCast: true,
-          ...(fb.sacrifice ? { _flashbackSacrifice: fb.sacrifice } : {})
+          ...(fb.sacrifice ? { _flashbackSacrifice: fb.sacrifice } : {}),
+          ...(fb.discard ? { _flashbackDiscard: fb.discard } : {}),
         };
         selectCardFromHand(flashbackCard as Card, rect);
       }
@@ -1092,6 +1131,11 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
               {reducedManaCost} <span className="line-through text-gray-500">{card.mana_cost}</span>
             </div>
           )}
+          {noncreatureTax > 0 && (
+            <div className="text-[10px] truncate text-amber-400 leading-tight">
+              {taxedManaCost} <span className="line-through text-gray-500">{card.mana_cost}</span>
+            </div>
+          )}
         </div>
 
         {/* Bottom right: P/T (creatures) or loyalty handled by the existing badge below */}
@@ -1530,6 +1574,12 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
               <span className="text-green-400 ml-2">{reducedManaCost}</span>
               <span className="text-green-500 text-xs ml-1">(-{costReduction} from power)</span>
             </div>
+          ) : noncreatureTax > 0 ? (
+            <div className="text-sm">
+              <span className="text-gray-500 line-through">{card.mana_cost}</span>
+              <span className="text-amber-400 ml-2">{taxedManaCost}</span>
+              <span className="text-amber-500 text-xs ml-1">(+{noncreatureTax} Thalia tax)</span>
+            </div>
           ) : (
             <div className="text-sm text-gray-400">{card.mana_cost}</div>
           )}
@@ -1619,11 +1669,13 @@ const PuzzleCard: FC<PuzzleCardProps> = ({
           )}
           {canCastFlashback && (
             <div className="text-xs text-orange-400 mt-2">
-              Click to cast (Flashback{(card as any).flashback.cost
-                ? ` ${(card as any).flashback.cost}`
-                : (card as any).flashback.sacrifice
-                  ? ` — Sacrifice ${(card as any).flashback.sacrifice.count} ${(card as any).flashback.sacrifice.type}${(card as any).flashback.sacrifice.count > 1 ? 's' : ''}`
-                  : ''})
+              {(card as any).flashback.discard
+                ? `Click to cast (Jump-start: pay ${(card as any).flashback.cost || card.mana_cost || ''} + discard ${(card as any).flashback.discard} card${(card as any).flashback.discard > 1 ? 's' : ''})`
+                : `Click to cast (Flashback${(card as any).flashback.cost
+                    ? ` ${(card as any).flashback.cost}`
+                    : (card as any).flashback.sacrifice
+                      ? ` — Sacrifice ${(card as any).flashback.sacrifice.count} ${(card as any).flashback.sacrifice.type}${(card as any).flashback.sacrifice.count > 1 ? 's' : ''}`
+                      : ''})`}
             </div>
           )}
           {canPlayFromExile && (

@@ -13,6 +13,8 @@ import { hasReplaceGraveyardWithExile, pushToGraveyardOrExile, performDiscard, g
 import { sourceHasKeyword, getWardCost } from '../engine/utils/keywords';
 import { hydrateGameState } from '../engine/utils/cardHydration';
 import { SacrificeFilter, matchesSacFilter, autoPickSacrifices } from '../engine/utils/sacFilter';
+import { creatureMatchesTypeFilter } from '../engine/utils/typeMatching';
+import { getNoncreatureCostTax } from '../engine/utils/costModifier';
 import { GameState, Card, Permanent, StackItem, TargetingData, PlayerKey, TurnPhase, Effect } from '@/types';
 import { PHASES, PhaseInfo } from '../constants/phases';
 
@@ -144,6 +146,10 @@ interface DiscardSelectionState {
   count: number;
   reason: string;
   targetPlayer?: PlayerKey;  // Which player is discarding (defaults to 'you')
+  // Optional callback invoked after the LAST discard completes. Used by
+  // Jump-start (Chemister's Insight) to bridge "pay discard cost" → "cast spell".
+  // When set, this fires INSTEAD of the default "resume stack" behavior.
+  onComplete?: (discardedCards: Card[]) => void;
 }
 
 interface TargetedDiscardState {
@@ -829,13 +835,17 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
   }, [gameState]);
 
   const getCostReduction = useCallback((card: Card): number => {
+    let reduction = 0;
+    // Self-static cost reductions (Spellseeker pattern — "costs {X} less...").
     const statics = (card as any).static_abilities || [];
     const hasReduction = statics.some((a: any) => a.type === 'cost_reduction' && a.reduction_type === 'total_power_of_creatures');
-    if (hasReduction) {
-      return calculateBattlefieldPower();
-    }
-    return 0;
-  }, [calculateBattlefieldPower]);
+    if (hasReduction) reduction += calculateBattlefieldPower();
+    // Opponent's tax statics (Thalia, Guardian of Thraben). Subtract from
+    // reduction — negative result means net increase, which the cost-payment
+    // math handles via `generic - reduction` → `generic + tax`.
+    if (gameState) reduction -= getNoncreatureCostTax(card, gameState);
+    return reduction;
+  }, [calculateBattlefieldPower, gameState]);
 
   // God mode actions
   const addCardToZone = useCallback((card: Card, player: PlayerKey, zone: 'hand' | 'battlefield' | 'graveyard' | 'library' | 'sideboard') => {
@@ -1523,11 +1533,16 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     }
 
     // Check mana and cast (skip charging when an alternate cost was already paid,
-    // e.g. Plot cards being cast from exile for free).
+    // e.g. Plot cards being cast from exile for free, Jump-start after the
+    // discard prompt closed).
     const altCostAlreadyPaid = !!(card as any)._altCostPaid;
     const parsedCost = parseManaCost(card.mana_cost);
     const reduction = getCostReduction(card);
-    let newManaPool = gameState.players.you.mana_pool;
+    // When the alt cost was already paid, leave mana_pool untouched — pulling
+    // from the closure here would refund mana that was spent BEFORE this
+    // function entered the stale closure's gameState (e.g. by the jump-start
+    // pre-payment block in selectCardFromHand).
+    let newManaPool: typeof gameState.players.you.mana_pool | null = null;
     if (!altCostAlreadyPaid) {
       if (!canAffordCost(parsedCost, gameState.players.you.mana_pool, 0, reduction)) {
         addLog(`Not enough mana to cast ${card.name}`);
@@ -1570,7 +1585,9 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
             graveyard: (prev.players.you.graveyard || []).filter(c => c.instance_id !== card.instance_id),
             exile: (prev.players.you.exile || []).filter(c => c.instance_id !== card.instance_id),
             library: (prev.players.you.library || []).filter(c => c.instance_id !== card.instance_id),
-            mana_pool: newManaPool
+            // Preserve the latest mana_pool when the alt cost was already paid
+            // (e.g. jump-start spent mana before opening the discard prompt).
+            mana_pool: newManaPool ?? prev.players.you.mana_pool,
           }
         }
       };
@@ -1911,6 +1928,55 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       }
       setAdditionalCostDiscardState({ card, rect, count: discardCount, discardedSoFar: [] });
       addLog(`Discard ${discardCount} card(s) as additional cost for ${card.name}`);
+      return;
+    }
+
+    // Check for jump-start discard cost (Chemister's Insight). Pay mana now
+    // (already paid below for permanent / spell paths — Jump-start spells are
+    // sorceries with normal mana_cost set to fb.cost), then open discard
+    // prompt. After discard, proceed with the cast.
+    if ((card as any)._flashbackDiscard) {
+      const discardCount = (card as any)._flashbackDiscard as number;
+      const youHand = gameState.players.you.hand || [];
+      // Need at least discardCount OTHER cards in hand (the spell itself is in
+      // the graveyard for flashback, so the hand pool is fully available).
+      if (youHand.length < discardCount) {
+        addLog(`Cannot jump-start ${card.name} — need ${discardCount} card(s) in hand to discard.`);
+        return;
+      }
+      // Validate + pay mana.
+      const parsedCost = parseManaCost(card.mana_cost || '');
+      if (!canAffordCost(parsedCost, gameState.players.you.mana_pool)) {
+        addLog(`Not enough mana to jump-start ${card.name}`);
+        return;
+      }
+      const newManaPool = spendMana(gameState.players.you.mana_pool, parsedCost);
+      setGameState(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          players: {
+            ...prev.players,
+            you: { ...prev.players.you, mana_pool: newManaPool },
+          },
+        };
+      });
+
+      setDiscardSelectionState({
+        count: discardCount,
+        reason: `${card.name} jump-start`,
+        targetPlayer: 'you',
+        onComplete: () => {
+          // Mana is already paid + discard is done. Strip _flashbackDiscard
+          // so the recursive call doesn't loop, mark altCostPaid so the cast
+          // pipeline doesn't re-spend mana, and route through the normal cast
+          // flow (which honors _flashbackCast for exile-after-resolve).
+          const { _flashbackDiscard: _drop, ...rest } = card as any;
+          const ready = { ...rest, _altCostPaid: true } as Card;
+          setTimeout(() => selectCardFromHand(ready, rect), 0);
+        },
+      });
+      addLog(`Jump-start ${card.name}: discard ${discardCount} card(s).`);
       return;
     }
 
@@ -2297,7 +2363,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     if (!sacrificeMode || sacrificeMode.actor !== 'opponent' || !gameState) return;
     const targetKey: PlayerKey = sacrificeMode.filter.controller === 'opponent' ? 'opponent' : 'you';
     const bf = gameState.players[targetKey]?.battlefield || [];
-    const candidates = bf.filter(p => matchesSacFilter(p, targetKey, sacrificeMode.filter));
+    const candidates = bf.filter(p => matchesSacFilter(p, targetKey, sacrificeMode.filter, gameState));
     if (candidates.length === 0) {
       addLog(`${sacrificeMode.reason}: no eligible permanents to sacrifice`);
       setSacrificeMode(null);
@@ -2628,7 +2694,9 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
     // Same for alternate costs (kicker/buyback) — mana already spent before entering targeting
     const xAlreadyPaid = (card as any)._xValue !== undefined;
     const altCostAlreadyPaid = !!(card as any)._kicked || !!(card as any)._buyback || !!(card as any)._altCostPaid;
-    let newManaPool = gameState.players.you.mana_pool;
+    // null sentinel = "don't touch mana_pool" (alt cost already paid upstream;
+    // pulling from stale closure here would refund the spend).
+    let newManaPool: typeof gameState.players.you.mana_pool | null = null;
 
     if (!isChannelCast && !xAlreadyPaid && !altCostAlreadyPaid) {
       const parsedCost = parseManaCost(card.mana_cost);
@@ -2689,7 +2757,8 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       newState.players.you.exile = (newState.players.you.exile || []).filter((c: any) => c.instance_id !== card.instance_id);
       newState.players.you.library = (newState.players.you.library || []).filter((c: any) => c.instance_id !== card.instance_id);
       newState.players.you.library_count = newState.players.you.library?.length ?? 0;
-      newState.players.you.mana_pool = newManaPool;
+      // Preserve latest mana_pool when alt cost was already paid upstream.
+      if (newManaPool !== null) newState.players.you.mana_pool = newManaPool;
       // Remove from impulse tracking if cast from exile
       if (newState.impulsedCards) {
         newState.impulsedCards = newState.impulsedCards.filter(ic => ic.card.instance_id !== card.instance_id);
@@ -2989,7 +3058,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       // --- Phase 1 (each_player only): opponent fires synchronously ---
       if (eachPlayer && !(topItem.effect as any)._eachPlayerOppDone) {
         const oppCandidates = (gameState.players.opponent.battlefield || []).filter(p =>
-          matchesSacFilter(p, 'opponent', { types, controller: 'opponent' })
+          matchesSacFilter(p, 'opponent', { types, controller: 'opponent' }, gameState)
         );
 
         const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
@@ -3040,7 +3109,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       const targetPlayer = eachPlayer ? 'you' : ((topItem.targeting_data?.targetData as 'you' | 'opponent') || 'opponent');
       if (targetPlayer === 'you') {
         const candidates = (gameState.players.you.battlefield || []).filter(p =>
-          matchesSacFilter(p, 'you', { types, controller: 'you' })
+          matchesSacFilter(p, 'you', { types, controller: 'you' }, gameState)
         );
         if (candidates.length === 0) {
           // No valid sac. If fallback_discard, prompt discard; else complete empty.
@@ -4102,9 +4171,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       const types: string[] = filter.types || [];
       const candidates = library.filter((c: any) => {
         if ((c as any).isToken) return false;
-        const tl = (c.type_line || '').toLowerCase();
-        if (types.length === 0) return true;
-        return types.some(t => tl.includes(String(t).toLowerCase()));
+        return creatureMatchesTypeFilter(c, types, owner, gameState);
       });
 
       // "Any number" includes zero — still allow the prompt so the player can
@@ -7832,7 +7899,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       ? 'you'
       : 'opponent';
     const topLib = gameState.players[controllerKey].library?.[0] || null;
-    const effectiveAbilities = getEffectiveActivatedAbilities(permanent, allBF, topLib);
+    const effectiveAbilities = getEffectiveActivatedAbilities(permanent, allBF, topLib, controllerKey, gameState);
     const ability = effectiveAbilities[abilityIndex];
     if (!ability) return;
 
@@ -7854,10 +7921,18 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       return;
     }
 
+    // 1.5. Check untap prerequisite ({Q} symbol — Pili-Pala). The source must
+    // already be tapped; untapping is part of the cost.
+    if (cost && typeof cost !== 'string' && cost.untap && !permanent.tapped) {
+      addLog(`${permanent.name} is already untapped`);
+      return;
+    }
+
     // 1b. Summoning sickness gate (MTG 302.1) — creatures without haste can't
-    // pay tap costs on the turn they entered. Applies to native AND granted abilities.
-    if (cost && typeof cost !== 'string' && cost.tap && !canActivateTapAbility(permanent, allBF)) {
-      addLog(`${permanent.name} has summoning sickness — can't tap for abilities this turn`);
+    // pay tap or untap costs on the turn they entered. Applies to native AND
+    // granted abilities. {T} and {Q} share the same restriction.
+    if (cost && typeof cost !== 'string' && (cost.tap || cost.untap) && !canActivateTapAbility(permanent, allBF)) {
+      addLog(`${permanent.name} has summoning sickness — can't ${cost.untap ? 'untap' : 'tap'} for abilities this turn`);
       return;
     }
 
@@ -8307,6 +8382,23 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       });
     }
 
+    // Pay {Q} cost — untap the source (Pili-Pala).
+    if (cost && typeof cost !== 'string' && cost.untap) {
+      setGameState(prev => {
+        if (!prev) return prev;
+        const newBattlefield = prev.players.you.battlefield.map(c =>
+          c.instance_id === permanent.instance_id ? { ...c, tapped: false } : c
+        );
+        return {
+          ...prev,
+          players: {
+            ...prev.players,
+            you: { ...prev.players.you, battlefield: newBattlefield }
+          }
+        };
+      });
+    }
+
     // Pay life cost (Adanto Vanguard "Pay 4 life: ...").
     if (lifeCost !== undefined && lifeCost > 0) {
       setGameState(prev => {
@@ -8432,7 +8524,7 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       ? 'you'
       : 'opponent';
     const topLib = (gameState?.players[controllerKey].library?.[0]) || null;
-    const abilities = getEffectiveActivatedAbilities(permanent, allBF, topLib);
+    const abilities = getEffectiveActivatedAbilities(permanent, allBF, topLib, controllerKey, gameState ?? undefined);
     if (abilities.length <= 1) {
       activateAbility(permanent, 0);
       return;
@@ -8490,13 +8582,20 @@ export const PuzzleProvider: FC<PuzzleProviderProps> = ({ children, initialGameS
       addLog(`${targetPlayer === 'you' ? 'You discard' : 'Opponent discards'} ${cardToDiscard.name}`);
     }
     const remaining = discardSelectionState.count - 1;
+    const prevDiscarded = (discardSelectionState as any)._discarded as Card[] | undefined || [];
+    const allDiscarded = [...prevDiscarded, cardToDiscard];
     if (remaining > 0) {
       // More discards needed — keep modal open with decremented count
-      setDiscardSelectionState({ ...discardSelectionState, count: remaining });
+      setDiscardSelectionState({ ...discardSelectionState, count: remaining, _discarded: allDiscarded } as any);
     } else {
-      // All discards done — close modal and resume stack
+      // All discards done — close modal. If a callback is set (Jump-start
+      // alt-cost bridge), invoke it INSTEAD of resuming the stack — the
+      // callback is responsible for whatever comes next.
+      const cb = discardSelectionState.onComplete;
       setDiscardSelectionState(null);
-      if (!holdingPriority && stack.length > 0) {
+      if (cb) {
+        cb(allDiscarded);
+      } else if (!holdingPriority && stack.length > 0) {
         setTimeout(() => resolveStack(), 100);
       }
     }

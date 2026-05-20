@@ -7,7 +7,8 @@
  * UI / logs can attribute the source if needed.
  */
 
-import { Card, Permanent, ActivatedAbility, TriggeredAbility } from '@/types';
+import { Card, Permanent, ActivatedAbility, TriggeredAbility, GameState, PlayerKey } from '@/types';
+import { creatureMatchesTypeFilter } from './typeMatching';
 
 export interface GrantedActivated extends ActivatedAbility {
   _grantedBy?: string;
@@ -56,7 +57,9 @@ export const getEffectiveTriggeredAbilities = (
 export const getEffectiveActivatedAbilities = (
   creature: Permanent,
   allBattlefield: Permanent[],
-  topOfYourLibrary?: Card | null
+  topOfYourLibrary?: Card | null,
+  controllerKey?: PlayerKey,
+  gameState?: GameState | null
 ): GrantedActivated[] => {
   const native: GrantedActivated[] = (creature.activated_abilities || []).map(a => ({ ...a }));
   const granted: GrantedActivated[] = [];
@@ -74,14 +77,20 @@ export const getEffectiveActivatedAbilities = (
   }
 
   // Snoop-style "has all activated abilities of the top card of your library"
-  // when the top card matches the filter (substring-OR on type_line).
+  // when the top card matches the filter. Routes through
+  // creatureMatchesTypeFilter so Maskwood Nexus / changeling extend the
+  // tribal match into the library zone (Snoop + Maskwood gets the borrow
+  // even when the top card isn't a printed Goblin).
   if (topOfYourLibrary) {
-    const topTL = (topOfYourLibrary.type_line || '').toLowerCase();
     for (const sa of (creature.static_abilities || [])) {
       if (sa.effect?.type !== 'grant_activated_from_top_library') continue;
       const types: string[] = (sa.effect as any).filter?.types || [];
-      const filterMatches = types.length === 0
-        || types.some(t => topTL.includes(String(t).toLowerCase()));
+      const filterMatches = creatureMatchesTypeFilter(
+        topOfYourLibrary,
+        types,
+        controllerKey || 'you',
+        gameState ?? undefined,
+      );
       if (!filterMatches) continue;
       const topAbilities = (topOfYourLibrary.activated_abilities || []) as ActivatedAbility[];
       for (const ability of topAbilities) {

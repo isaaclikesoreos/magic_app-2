@@ -13,6 +13,8 @@ from puzzles.puzzle_data import (
     soul_sisters_combo,
     pyromancer_pings,
     kolaghan_command_test,
+    storm_through_thalias,
+    aristocrats_karn_combo,
 )
 
 PUZZLE_REGISTRY = {
@@ -30,4 +32,6 @@ PUZZLE_REGISTRY = {
     "soul_sisters_combo": soul_sisters_combo.PUZZLE,
     "pyromancer_pings": pyromancer_pings.PUZZLE,
     "kolaghan_command_test": kolaghan_command_test.PUZZLE,
+    "storm_through_thalias": storm_through_thalias.PUZZLE,
+    "aristocrats_karn_combo": aristocrats_karn_combo.PUZZLE,
 }

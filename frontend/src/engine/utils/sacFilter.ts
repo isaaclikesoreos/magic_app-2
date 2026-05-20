@@ -1,5 +1,6 @@
-import type { Permanent } from '@/types';
+import type { Permanent, GameState } from '@/types';
 import { calculateCMC } from './manaCost';
+import { creatureMatchesTypeFilter } from './typeMatching';
 
 export type SacController = 'you' | 'opponent' | 'any';
 
@@ -9,10 +10,16 @@ export interface SacrificeFilter {
   excludeInstanceId?: string;
 }
 
+/**
+ * Optional `gameState` enables Maskwood Nexus / changeling type-line modifiers
+ * to apply. Callers without easy access to gameState can omit it — the filter
+ * falls back to literal type_line substring matching (existing behavior).
+ */
 export const matchesSacFilter = (
   permanent: Permanent,
   permanentController: 'you' | 'opponent',
-  filter: SacrificeFilter
+  filter: SacrificeFilter,
+  gameState?: GameState
 ): boolean => {
   if (filter.controller === 'you' && permanentController !== 'you') return false;
   if (filter.controller === 'opponent' && permanentController !== 'opponent') return false;
@@ -22,9 +29,9 @@ export const matchesSacFilter = (
   }
 
   if (filter.types && filter.types.length > 0) {
-    const tl = (permanent.type_line || '').toLowerCase();
-    const matchesType = filter.types.some(t => tl.includes(t.toLowerCase()));
-    if (!matchesType) return false;
+    if (!creatureMatchesTypeFilter(permanent, filter.types, permanentController, gameState)) {
+      return false;
+    }
   }
 
   return true;

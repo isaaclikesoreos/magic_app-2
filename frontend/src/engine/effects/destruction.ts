@@ -306,7 +306,7 @@ export const applyTargetPlayerSacrifice = (
     }
   } else {
     const candidates = (newState.players[targetPlayer].battlefield || []).filter(p =>
-      matchesSacFilter(p, targetPlayer, filter)
+      matchesSacFilter(p, targetPlayer, filter, newState)
     );
     if (candidates.length === 0) {
       addLog(`${stackItem.source.name}: ${playerLabel.toLowerCase()} has no ${types.join(' or ')} to sacrifice.`);

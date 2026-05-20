@@ -42,7 +42,7 @@ VALID_EFFECT_TYPES = {
     'add_counter', 'add_counter_to_self', 'add_counter_to_source',
     'remove_counter',
     # Mana
-    'add_mana', 'altar_add_mana', 'channel_activate',
+    'add_mana', 'add_mana_any_color', 'altar_add_mana', 'channel_activate',
     # Battlefield
     'enter_battlefield', 'enter_battlefield_permanent', 'create_token',
     'create_token_copy',
@@ -64,6 +64,10 @@ VALID_EFFECT_TYPES = {
     'exile_self_from_graveyard',
     # Planeswalker / wish
     'animate_artifact_as_creature', 'wish_from_sideboard',
+    # Type-system statics
+    'every_creature_type',
+    # Cost modifiers
+    'noncreature_spell_cost_more',
     # Untap / equipment
     'untap_self', 'attach_self_to_triggering_creature', 'equip', 'doesnt_untap',
     # Granted abilities (equipment)
@@ -88,7 +92,7 @@ VALID_KEYWORDS = {
     # Blocking
     'defender',
     # Other
-    'prowess', 'toxic',
+    'prowess', 'toxic', 'changeling',
 }
 
 VALID_CONDITION_TYPES = {
